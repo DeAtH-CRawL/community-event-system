@@ -3,32 +3,23 @@
 import { useState, useEffect, useMemo } from 'react';
 import { getActiveEntries, consumeCoupons, type ActiveEntry } from '@/src/lib/actions';
 
+const DEFAULT_EVENT = "Community Dinner 2024";
+
 export default function FoodCounterPage() {
   const [entries, setEntries] = useState<ActiveEntry[]>([]);
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [redemptionQuantities, setRedemptionQuantities] = useState<Record<string, number>>({});
+  const [isProcessing, setIsProcessing] = useState<string | null>(null);
+  const [lastSync, setLastSync] = useState<Date>(new Date());
 
-  // Get active entries and filter by ACTIVE status
   const updateEntries = async () => {
     setIsLoading(true);
     try {
-      const allEntries = await getActiveEntries();
-      const safe = Array.isArray(allEntries) ? allEntries : [];
-      setEntries(safe.filter((e) => e.status === 'ACTIVE'));
-
-      // Initialize quantities for new entries
-      setRedemptionQuantities(prev => {
-        const next = { ...prev };
-        safe.forEach(e => {
-          if (next[e.id] === undefined) next[e.id] = 1;
-        });
-        return next;
-      });
+      const activeEntries = await getActiveEntries(DEFAULT_EVENT);
+      setEntries(Array.isArray(activeEntries) ? activeEntries : []);
+      setLastSync(new Date());
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error('getActiveEntries failed', err);
-      setEntries([]);
     } finally {
       setIsLoading(false);
     }
@@ -36,156 +27,140 @@ export default function FoodCounterPage() {
 
   useEffect(() => {
     updateEntries();
+    const interval = setInterval(updateEntries, 30000);
+    return () => clearInterval(interval);
   }, []);
 
-  // Filter entries by surname search
   const filteredEntries = useMemo(() => {
     const trimmed = search.trim().toLowerCase();
-    const safeEntries = Array.isArray(entries) ? entries : [];
-    if (!trimmed) return safeEntries;
-
-    return safeEntries.filter((entry) =>
-      entry.surname.toLowerCase().includes(trimmed)
+    if (!trimmed) return entries;
+    return entries.filter((entry) =>
+      entry.surname.toLowerCase().includes(trimmed) ||
+      entry.head_name.toLowerCase().includes(trimmed)
     );
   }, [entries, search]);
 
-  const handleConsume = async (entryId: string) => {
-    const quantity = redemptionQuantities[entryId] || 1;
+  const handleRedeem = async (entryId: string, quantity: number) => {
+    if (quantity > 3) {
+      if (!window.confirm(`GIVE ${quantity} PLATES? Please confirm.`)) return;
+    }
+
+    setIsProcessing(entryId);
     try {
-      const result = await consumeCoupons(entryId, quantity);
-      if ((result as any).error) {
-        if (typeof window !== 'undefined') {
-          window.alert((result as any).message);
-        }
+      const result = await consumeCoupons({
+        role: 'volunteer',
+        entryId: entryId,
+        quantity: quantity
+      });
+
+      if (!result.success) {
+        window.alert(result.message || 'Error processing request.');
+        await updateEntries();
+      } else {
+        await updateEntries();
       }
-      await updateEntries();
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('consumeCoupons failed', err);
+      window.alert('Connection problem. Check internet.');
+    } finally {
+      setIsProcessing(null);
     }
   };
 
-  const handleQuantityChange = (entryId: string, val: string, max: number) => {
-    const num = parseInt(val);
-    if (isNaN(num)) return;
-    setRedemptionQuantities(prev => ({
-      ...prev,
-      [entryId]: Math.min(Math.max(1, num), max)
-    }));
-  };
-
   return (
-    <main className="min-h-screen bg-slate-900 text-white flex flex-col">
+    <main className="min-h-screen bg-slate-950 text-white flex flex-col">
       <div className="w-full max-w-xl mx-auto px-4 py-6 flex-1 flex flex-col">
-        <header className="mb-4">
-          <h1 className="text-2xl font-bold tracking-wide mb-2">
-            Food Counter
-          </h1>
-          <p className="text-sm text-slate-300">
-            Track coupon consumption for active families.
-          </p>
+        <header className="mb-6 flex justify-between items-start">
+          <div>
+            <h1 className="text-3xl font-black tracking-tight text-emerald-400">
+              Food Counter
+            </h1>
+            <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest mt-1">
+              {isLoading ? 'Syncing…' : `Last Sync: ${lastSync.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`}
+            </p>
+          </div>
+          <button
+            onClick={updateEntries}
+            className="p-3 rounded-2xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white transition-all active:scale-95 shadow-lg"
+          >
+            🔄
+          </button>
         </header>
 
-        <div className="mb-4">
+        <div className="mb-6">
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by surname…"
-            className="w-full rounded-xl border border-slate-700 bg-slate-800/80 px-4 py-2.5 text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+            placeholder="Search Surname / Head Name…"
+            className="w-full rounded-2xl border-4 border-slate-800 bg-slate-900 px-6 py-4 text-xl font-black placeholder:text-slate-700 focus:outline-none focus:border-emerald-500 transition-all shadow-xl"
           />
         </div>
 
-        <section className="flex-1 overflow-y-auto pb-6 space-y-3">
-          {isLoading && (
-            <p className="text-center text-sm text-slate-400">Loading…</p>
-          )}
+        <section className="flex-1 overflow-y-auto pb-6 space-y-4">
           {filteredEntries.length === 0 ? (
-            <p className="text-center text-sm text-slate-400 mt-8">
-              {search
-                ? 'No active families found matching your search.'
-                : 'No active families at the event yet.'}
-            </p>
+            <div className="text-center py-20">
+              {search ? (
+                <>
+                  <p className="text-xl font-black text-slate-500">No Match Found</p>
+                  <p className="text-slate-700 font-bold mt-1">Is the name spelled correctly?</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-xl font-black text-slate-500">No Active Families</p>
+                  <p className="text-slate-700 font-bold mt-1">New entries will appear here automatically.</p>
+                </>
+              )}
+            </div>
           ) : (
             filteredEntries.map((entry) => {
-              const isCompleted = entry.remaining_coupons === 0;
-              const canConsume = entry.remaining_coupons >= 1;
-              const selectedQty = redemptionQuantities[entry.id] || 1;
+              const isProcessingThis = isProcessing === entry.id;
+              const globalProcessing = isProcessing !== null;
 
               return (
                 <div
                   key={entry.id}
-                  className={`w-full rounded-2xl border px-4 py-4 shadow-md transition-colors ${isCompleted
-                      ? 'bg-slate-700 border-slate-600'
-                      : 'bg-slate-800 border-slate-700'
+                  className={`w-full rounded-[2.5rem] bg-slate-900 border-2 border-slate-800 p-6 shadow-2xl transition-all relative overflow-hidden ${isProcessingThis ? 'ring-2 ring-emerald-500 scale-[0.98]' : ''
                     }`}
                 >
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-baseline gap-2 mb-1">
-                        <span
-                          className={`text-lg font-bold tracking-wide ${isCompleted ? 'text-slate-400' : 'text-white'
-                            }`}
-                        >
-                          {entry.surname} Family
-                        </span>
-                      </div>
-                      <p
-                        className={`text-sm ${isCompleted ? 'text-slate-500' : 'text-slate-300'
-                          }`}
-                      >
+                  <div className="flex items-start justify-between mb-6">
+                    <div className="flex-1 mr-4">
+                      <h2 className="text-2xl font-black text-white leading-tight">
+                        {entry.surname}
+                      </h2>
+                      <p className="text-sm text-slate-500 font-black uppercase tracking-wider">
                         {entry.head_name}
                       </p>
                     </div>
-                    <div className="ml-4 text-right">
-                      {isCompleted ? (
-                        <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                          ALL CONSUMED
-                        </div>
-                      ) : (
-                        <>
-                          <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">
-                            Remaining
-                          </div>
-                          <div className="text-3xl font-extrabold text-emerald-400">
-                            {entry.remaining_coupons}
-                          </div>
-                        </>
-                      )}
+                    <div className="text-right">
+                      <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">
+                        Left
+                      </p>
+                      <p className="text-4xl font-black text-emerald-400">
+                        {entry.remaining_coupons}
+                      </p>
                     </div>
                   </div>
 
-                  {!isCompleted && (
-                    <div className="flex gap-3 mt-3">
-                      <div className="flex-1 flex flex-col gap-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">
-                          Plates
-                        </label>
-                        <input
-                          type="number"
-                          min="1"
-                          max={entry.remaining_coupons}
-                          value={selectedQty}
-                          onChange={(e) => handleQuantityChange(entry.id, e.target.value, entry.remaining_coupons)}
-                          className="w-full rounded-xl border border-slate-700 bg-slate-900/50 px-3 py-2.5 text-center font-bold text-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                      </div>
-                      <div className="flex-[2] flex flex-col gap-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1 opacity-0">
-                          Spacer
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => handleConsume(entry.id)}
-                          disabled={!canConsume}
-                          className={`w-full rounded-xl font-extrabold text-lg py-3 shadow-md transition-all active:scale-95 ${canConsume
-                              ? 'bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-900 shadow-emerald-500/20'
-                              : 'bg-slate-700 text-slate-500 cursor-not-allowed'
-                            }`}
-                        >
-                          Redeem {selectedQty > 1 ? `${selectedQty} Plates` : '1 Plate'}
-                        </button>
-                      </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[1, 2, 3].map((num) => (
+                      <button
+                        key={num}
+                        type="button"
+                        onClick={() => handleRedeem(entry.id, num)}
+                        disabled={entry.remaining_coupons < num || globalProcessing}
+                        className={`rounded-2xl py-5 text-xl font-black transition-all shadow-lg active:scale-95 disabled:opacity-50 ${entry.remaining_coupons >= num
+                            ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-emerald-500/10'
+                            : 'bg-slate-800 text-slate-600 border-0 cursor-not-allowed'
+                          }`}
+                      >
+                        {isProcessingThis ? '…' : `GIVE ${num}`}
+                      </button>
+                    ))}
+                  </div>
+
+                  {isProcessingThis && (
+                    <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px] flex items-center justify-center">
+                      <p className="text-xs font-black text-emerald-400 animate-pulse tracking-widest uppercase">Processing Request…</p>
                     </div>
                   )}
                 </div>
