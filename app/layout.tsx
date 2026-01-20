@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -23,10 +24,26 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning={true}>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <header className="w-full bg-amber-500 text-slate-900 shadow-md">
+          <nav className="max-w-xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+            <Link
+              href="/entry"
+              className="flex-1 text-center text-xs font-extrabold tracking-wide rounded-full bg-amber-50/90 text-amber-900 px-3 py-2 active:scale-95 transition-transform"
+            >
+              ENTRY GATE
+            </Link>
+            <Link
+              href="/food"
+              className="flex-1 text-center text-xs font-extrabold tracking-wide rounded-full bg-amber-50/90 text-amber-900 px-3 py-2 active:scale-95 transition-transform"
+            >
+              FOOD COUNTER
+            </Link>
+          </nav>
+        </header>
         {children}
       </body>
     </html>
