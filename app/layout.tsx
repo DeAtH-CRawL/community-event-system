@@ -9,9 +9,11 @@ const geistSans = Geist({
 });
 
 const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+  variable: "--font-mono",
   subsets: ["latin"],
 });
+
+const DEFAULT_EVENT = "Community Dinner 2024";
 
 export const metadata: Metadata = {
   title: "Create Next App",
@@ -28,17 +30,22 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <header className="w-full bg-amber-500 text-slate-900 shadow-md">
-          <nav className="max-w-xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+        <header className="w-full border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 sticky top-0 z-50">
+          <div className="max-w-xl mx-auto px-4 pt-4 flex flex-col items-center">
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-[0.2em] mb-1">
+              {DEFAULT_EVENT}
+            </p>
+          </div>
+          <nav className="max-w-xl mx-auto px-4 pb-4 pt-1 flex items-center justify-between gap-4">
             <Link
               href="/entry"
-              className="flex-1 text-center text-xs font-extrabold tracking-wide rounded-full bg-amber-50/90 text-amber-900 px-3 py-2 active:scale-95 transition-transform"
+              className="flex-1 text-center text-xs font-bold tracking-wider rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 px-3 py-3 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-95 transition-all focus:ring-2 focus:ring-slate-900 dark:focus:ring-white outline-none"
             >
               ENTRY GATE
             </Link>
             <Link
               href="/food"
-              className="flex-1 text-center text-xs font-extrabold tracking-wide rounded-full bg-amber-50/90 text-amber-900 px-3 py-2 active:scale-95 transition-transform"
+              className="flex-1 text-center text-xs font-bold tracking-wider rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 px-3 py-3 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-95 transition-all focus:ring-2 focus:ring-slate-900 dark:focus:ring-white outline-none"
             >
               FOOD COUNTER
             </Link>

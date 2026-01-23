@@ -1,61 +1,92 @@
--- PostgreSQL schema for the community event system
--- Families represent households, events define coupon rules,
--- and event_entries track each family's attendance and coupon usage.
+-- PostgreSQL schema for the refactored community event system
+-- 
+-- ARCHITECTURE:
+-- - families: Synced from Google Sheets (family master data)
+-- - servings: Runtime state tracking plates used per family per event
+-- - audit_logs: Unchanged from previous version
+--
+-- Users NEVER touch this database directly. They edit Google Sheets.
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- =============================================================================
+-- FAMILIES TABLE (synced from Google Sheets)
+-- =============================================================================
+-- This table is populated by the "Sync from Sheet" action.
+-- It is an atomic replacement - all rows deleted and re-inserted on sync.
+--
+-- IMPORTANT: family_id is a manual stable ID from the sheet (e.g., "F001"),
+-- NOT a UUID, NOT a row number. This allows users to sort/filter the sheet
+-- without breaking references.
+
 CREATE TABLE IF NOT EXISTS families (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    surname TEXT NOT NULL,
-    head_name TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    family_size INTEGER NOT NULL CHECK (family_size >= 0),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    family_id TEXT PRIMARY KEY,           -- Manual stable ID from sheet (e.g., "F001")
+    family_name TEXT NOT NULL,            -- Surname
+    head_name TEXT NOT NULL,              -- Head of household
+    phone TEXT NOT NULL,                  -- Phone number
+    members_count INTEGER NOT NULL CHECK (members_count >= 1),  -- = plates_entitled
+    notes TEXT,                           -- Optional admin notes
+    synced_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Indexes for fast searching (non-unique as requested)
-CREATE INDEX IF NOT EXISTS idx_families_surname ON families (surname);
-CREATE INDEX IF NOT EXISTS idx_families_head_name ON families (head_name);
+-- Indexes for fast case-insensitive search
+-- Using LOWER() for proper ILIKE performance
+CREATE INDEX IF NOT EXISTS idx_families_family_name_lower ON families (LOWER(family_name));
+CREATE INDEX IF NOT EXISTS idx_families_head_name_lower ON families (LOWER(head_name));
 CREATE INDEX IF NOT EXISTS idx_families_phone ON families (phone);
 
-CREATE TABLE IF NOT EXISTS events (
+
+-- =============================================================================
+-- SERVINGS TABLE (runtime event state)
+-- =============================================================================
+-- Tracks how many plates have been served to each family for each event.
+-- This is the ONLY runtime state we need to track.
+--
+-- plates_remaining = families.members_count - servings.plates_used
+-- Block serving when plates_remaining = 0
+
+CREATE TABLE IF NOT EXISTS servings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name TEXT NOT NULL,
-    coupons_per_member INTEGER NOT NULL CHECK (coupons_per_member >= 0),
-    guest_coupon_price NUMERIC(10, 2) NOT NULL CHECK (guest_coupon_price >= 0),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE (name)
+    event_name TEXT NOT NULL,             -- Event identifier (e.g., "Community Dinner 2024")
+    family_id TEXT NOT NULL REFERENCES families(family_id) ON DELETE CASCADE,
+    plates_used INTEGER NOT NULL DEFAULT 0 CHECK (plates_used >= 0),
+    checked_in_at TIMESTAMP WITH TIME ZONE,  -- NULL means not checked in yet
+    last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(event_name, family_id)         -- One serving record per family per event
 );
 
-CREATE TABLE IF NOT EXISTS event_entries (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_id UUID NOT NULL REFERENCES events (id) ON DELETE CASCADE,
-    family_id UUID NOT NULL REFERENCES families (id) ON DELETE CASCADE,
-    members_present INTEGER NOT NULL CHECK (members_present >= 0),
-    guest_count INTEGER NOT NULL CHECK (guest_count >= 0),
-    member_coupons INTEGER NOT NULL CHECK (member_coupons >= 0),
-    guest_coupons INTEGER NOT NULL CHECK (guest_coupons >= 0),
-    total_coupons INTEGER NOT NULL CHECK (total_coupons >= 0),
-    remaining_coupons INTEGER NOT NULL CHECK (remaining_coupons >= 0),
-    status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'FOOD_EXHAUSTED', 'CLOSED')),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE (event_id, family_id)
-);
+CREATE INDEX IF NOT EXISTS idx_servings_event_name ON servings (event_name);
+CREATE INDEX IF NOT EXISTS idx_servings_family_id ON servings (family_id);
 
-CREATE INDEX IF NOT EXISTS idx_event_entries_event_id ON event_entries (event_id);
-CREATE INDEX IF NOT EXISTS idx_event_entries_family_id ON event_entries (family_id);
+
+-- =============================================================================
+-- AUDIT LOGS TABLE (unchanged from previous version)
+-- =============================================================================
+-- Tracks all actions for dispute resolution and debugging.
 
 CREATE TABLE IF NOT EXISTS audit_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    actor_role TEXT NOT NULL, -- 'volunteer', 'admin'
-    event_id UUID REFERENCES events(id),
-    family_id UUID REFERENCES families(id),
-    action_type TEXT NOT NULL, -- 'CHECK_IN', 'CONSUME', 'ADJUST', 'CLOSE', 'REOPEN'
+    actor_role TEXT NOT NULL,             -- 'volunteer', 'admin'
+    event_name TEXT NOT NULL,             -- Event name (not ID, for human readability)
+    family_id TEXT REFERENCES families(family_id) ON DELETE SET NULL,
+    action_type TEXT NOT NULL,            -- 'SYNC', 'CHECK_IN', 'SERVE', 'ADJUST', 'RESET'
     before_value JSONB,
     after_value JSONB,
-    details TEXT,
+    details TEXT,                         -- Human-readable description
+    station_id TEXT,                      -- Optional: which device/station performed this
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_audit_logs_event_id ON audit_logs (event_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_event_name ON audit_logs (event_name);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_family_id ON audit_logs (family_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at);
+
+
+-- =============================================================================
+-- MIGRATION: Drop old tables if they exist
+-- =============================================================================
+-- Run these manually if migrating from old schema:
+--
+-- DROP TABLE IF EXISTS event_entries CASCADE;
+-- DROP TABLE IF EXISTS events CASCADE;
+-- Then rename the old families table or migrate data to Google Sheets first.

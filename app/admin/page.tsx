@@ -2,40 +2,52 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import {
-    getAllEntries,
-    adjustCoupons,
-    updateEntryStatus,
-    getEntryHistory,
-    getEventSnapshot,
-    type ActiveEntry,
-    type AuditLogEntry
+    getAllFamiliesWithStatus,
+    adjustPlates,
+    getAuditHistory,
+    getEventStats,
+    resetEvent,
+    type Family,
+    type AuditLogEntry,
 } from '@/src/lib/actions';
 
 const DEFAULT_EVENT = "Community Dinner 2024";
 
 export default function AdminDashboard() {
-    const [entries, setEntries] = useState<ActiveEntry[]>([]);
+    const [families, setFamilies] = useState<Family[]>([]);
     const [search, setSearch] = useState('');
     const [isLoading, setIsLoading] = useState(false);
-    const [snapshot, setSnapshot] = useState({ totalFamilies: 0, totalPlatesServed: 0, totalGuests: 0 });
+    const [stats, setStats] = useState({ totalFamilies: 0, familiesCheckedIn: 0, totalPlatesEntitled: 0, totalPlatesServed: 0 });
 
-    // Modals state
-    const [selectedEntry, setSelectedEntry] = useState<ActiveEntry | null>(null);
+    // Sync state
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [syncResult, setSyncResult] = useState<{ success: boolean; message: string } | null>(null);
+
+    // Modal state
+    const [selectedFamily, setSelectedFamily] = useState<Family | null>(null);
     const [history, setHistory] = useState<AuditLogEntry[]>([]);
     const [isHistoryLoading, setIsHistoryLoading] = useState(false);
     const [showAdjustment, setShowAdjustment] = useState(false);
     const [adjustmentValue, setAdjustmentValue] = useState(0);
     const [adjReason, setAdjReason] = useState('');
 
+    // Confirmation Modal
+    const [confirmConfig, setConfirmConfig] = useState<{
+        show: boolean;
+        title: string;
+        message: string;
+        onConfirm: () => void;
+    }>({ show: false, title: '', message: '', onConfirm: () => { } });
+
     const loadData = async () => {
         setIsLoading(true);
         try {
-            const [entriesData, snapshotData] = await Promise.all([
-                getAllEntries(DEFAULT_EVENT),
-                getEventSnapshot(DEFAULT_EVENT)
+            const [familiesData, statsData] = await Promise.all([
+                getAllFamiliesWithStatus(DEFAULT_EVENT),
+                getEventStats(DEFAULT_EVENT),
             ]);
-            setEntries(Array.isArray(entriesData) ? entriesData : []);
-            setSnapshot(snapshotData);
+            setFamilies(Array.isArray(familiesData) ? familiesData : []);
+            setStats(statsData);
         } catch (err) {
             console.error(err);
         } finally {
@@ -47,21 +59,67 @@ export default function AdminDashboard() {
         loadData();
     }, []);
 
+    // Sync from Google Sheets
+    const handleSync = async () => {
+        setIsSyncing(true);
+        setSyncResult(null);
+        try {
+            const response = await fetch('/api/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ stationId: 'Admin Panel' }),
+            });
+            const data = await response.json();
+            setSyncResult({ success: data.success, message: data.message });
+            if (data.success) {
+                loadData();
+            }
+        } catch (err) {
+            setSyncResult({ success: false, message: 'Sync failed. Check connection.' });
+        } finally {
+            setIsSyncing(false);
+        }
+    };
+
+    // Reset event (clear all servings)
+    const handleReset = () => {
+        setConfirmConfig({
+            show: true,
+            title: 'Reset Event',
+            message: `This will clear ALL check-ins and serving records for "${DEFAULT_EVENT}". This cannot be undone. Are you absolutely sure?`,
+            onConfirm: async () => {
+                try {
+                    const result = await resetEvent({ eventName: DEFAULT_EVENT });
+                    if (result.success) {
+                        loadData();
+                        window.alert(result.message);
+                    } else {
+                        window.alert(result.message);
+                    }
+                } catch (err) {
+                    window.alert('Reset failed.');
+                }
+                setConfirmConfig(prev => ({ ...prev, show: false }));
+            },
+        });
+    };
+
     const filtered = useMemo(() => {
         const q = search.trim().toLowerCase();
-        if (!q) return entries;
-        return entries.filter(e =>
-            e.surname.toLowerCase().includes(q) ||
-            e.head_name.toLowerCase().includes(q)
+        if (!q) return families;
+        return families.filter((f) =>
+            f.family_name.toLowerCase().includes(q) ||
+            f.head_name.toLowerCase().includes(q) ||
+            f.phone.includes(q)
         );
-    }, [entries, search]);
+    }, [families, search]);
 
-    const handleOpenHistory = async (entry: ActiveEntry) => {
-        setSelectedEntry(entry);
+    const handleOpenHistory = async (family: Family) => {
+        setSelectedFamily(family);
         setHistory([]);
         setIsHistoryLoading(true);
         try {
-            const data = await getEntryHistory(entry.family_id, entry.event_id);
+            const data = await getAuditHistory(DEFAULT_EVENT, family.family_id);
             setHistory(data);
         } catch (err) {
             console.error(err);
@@ -71,13 +129,14 @@ export default function AdminDashboard() {
     };
 
     const handleAdjustment = async () => {
-        if (!selectedEntry || adjustmentValue === 0) return;
+        if (!selectedFamily || adjustmentValue === 0) return;
         try {
-            const res = await adjustCoupons({
+            const res = await adjustPlates({
                 role: 'admin',
-                entryId: selectedEntry.id,
+                eventName: DEFAULT_EVENT,
+                familyId: selectedFamily.family_id,
                 adjustment: adjustmentValue,
-                details: adjReason || `Admin adjustment: ${adjustmentValue > 0 ? '+' : ''}${adjustmentValue} plates.`
+                reason: adjReason || `Admin adjustment: ${adjustmentValue > 0 ? '+' : ''}${adjustmentValue} plates.`,
             });
             if (res.success) {
                 setShowAdjustment(false);
@@ -88,144 +147,204 @@ export default function AdminDashboard() {
                 window.alert(res.message);
             }
         } catch (err) {
-            window.alert('Adjustment failed due to a network error.');
-        }
-    };
-
-    const handleStatusToggle = async (entry: ActiveEntry) => {
-        const next = entry.status === 'CLOSED' ? 'ACTIVE' : 'CLOSED';
-        if (!window.confirm(`Set status to ${next}?`)) return;
-        try {
-            const res = await updateEntryStatus({
-                role: 'admin',
-                entryId: entry.id,
-                newStatus: next
-            });
-            if (res.success) {
-                loadData();
-            } else {
-                window.alert(res.message);
-            }
-        } catch (err) {
-            window.alert('Status update failed due to a network error.');
+            window.alert('Adjustment failed.');
         }
     };
 
     return (
         <main className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-8">
             <div className="max-w-6xl mx-auto">
+                {/* Header */}
                 <header className="flex flex-col sm:flex-row sm:items-center justify-between mb-8 gap-4">
                     <div>
                         <h1 className="text-4xl font-black tracking-tight text-white mb-1">Admin Panel</h1>
                         <p className="text-slate-400 font-bold uppercase tracking-widest text-xs">Event: {DEFAULT_EVENT}</p>
                     </div>
-                    <div className="flex gap-2">
-                        <button onClick={loadData} className="px-6 py-2 bg-emerald-500 text-slate-950 rounded-xl font-black hover:bg-emerald-400 transition-colors shadow-lg shadow-emerald-500/10">Refresh Data</button>
+                    <div className="flex gap-3 items-center flex-wrap">
+                        {/* Sync from Sheet Button */}
+                        <button
+                            onClick={handleSync}
+                            disabled={isSyncing}
+                            className="px-5 py-2.5 bg-blue-600 text-white rounded-lg font-bold text-xs uppercase tracking-wider hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+                        >
+                            {isSyncing ? (
+                                <>
+                                    <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                                    Syncing...
+                                </>
+                            ) : (
+                                '↓ Sync from Sheet'
+                            )}
+                        </button>
+                        {/* Reset Button */}
+                        <button
+                            onClick={handleReset}
+                            className="px-5 py-2.5 bg-red-600/20 text-red-400 border border-red-600/30 rounded-lg font-bold text-xs uppercase tracking-wider hover:bg-red-600/30 transition-colors"
+                        >
+                            Reset Event
+                        </button>
+                        {/* Refresh Button */}
+                        <button
+                            onClick={loadData}
+                            className="px-5 py-2.5 bg-slate-800 text-white rounded-lg font-bold text-xs uppercase tracking-wider hover:bg-slate-700 transition-colors"
+                        >
+                            Refresh
+                        </button>
                     </div>
                 </header>
 
-                {/* Event Snapshot */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-10">
-                    <div className="bg-slate-900 border-2 border-slate-800 rounded-3xl p-6">
-                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Families Entered</p>
-                        <p className="text-4xl font-black text-white">{snapshot.totalFamilies}</p>
+                {/* Sync Result Message */}
+                {syncResult && (
+                    <div className={`mb-6 p-4 rounded-lg border ${syncResult.success ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
+                        <p className="font-bold text-sm">{syncResult.message}</p>
                     </div>
-                    <div className="bg-slate-900 border-2 border-slate-800 rounded-3xl p-6">
-                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Plates Served</p>
-                        <p className="text-4xl font-black text-blue-400">{snapshot.totalPlatesServed}</p>
+                )}
+
+                {/* Stats Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-10">
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Total Families</p>
+                        <p className="text-3xl font-bold text-white">{stats.totalFamilies}</p>
                     </div>
-                    <div className="bg-slate-900 border-2 border-slate-800 rounded-3xl p-6">
-                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Guests Total</p>
-                        <p className="text-4xl font-black text-purple-400">{snapshot.totalGuests}</p>
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Checked In</p>
+                        <p className="text-3xl font-bold text-emerald-400">{stats.familiesCheckedIn}</p>
+                    </div>
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Plates Entitled</p>
+                        <p className="text-3xl font-bold text-blue-400">{stats.totalPlatesEntitled}</p>
+                    </div>
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Plates Served</p>
+                        <p className="text-3xl font-bold text-purple-400">{stats.totalPlatesServed}</p>
                     </div>
                 </div>
 
+                {/* Search */}
                 <div className="mb-8">
                     <input
                         type="text"
-                        placeholder="Search Live Entries (Surname / Head)…"
+                        placeholder="Search by Family Name or Phone..."
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
-                        className="w-full max-w-md bg-slate-900 border-4 border-slate-800 rounded-2xl px-6 py-4 text-lg font-black focus:border-emerald-500 outline-none transition-all shadow-xl"
+                        className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-base focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all shadow-sm"
                     />
                 </div>
 
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                        <thead>
-                            <tr className="border-b-2 border-slate-800 text-slate-500 text-[10px] font-black uppercase tracking-widest">
-                                <th className="pb-4 px-2 text-center">Identity</th>
-                                <th className="pb-4 px-2">Type</th>
-                                <th className="pb-4 px-2">Coupons</th>
-                                <th className="pb-4 px-2">Status</th>
-                                <th className="pb-4 px-2 text-right">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {filtered.map(e => (
-                                <tr key={e.id} className="border-b border-slate-900 hover:bg-white/5 transition-colors">
-                                    <td className="py-5 px-2">
-                                        <p className="font-black text-xl text-white leading-none mb-1">{e.surname}</p>
-                                        <p className="text-sm text-slate-500 font-bold">{e.head_name}</p>
-                                    </td>
-                                    <td className="py-5 px-2">
-                                        <div className="flex gap-2 text-[10px] font-black uppercase">
-                                            <span className="bg-blue-500/10 text-blue-400 px-2 py-1 rounded-lg">M: {e.members_present}</span>
-                                            <span className="bg-purple-500/10 text-purple-400 px-2 py-1 rounded-lg">G: {e.guest_count}</span>
-                                        </div>
-                                    </td>
-                                    <td className="py-5 px-2">
-                                        <p className="font-black text-2xl text-emerald-400">{e.remaining_coupons} <span className="text-xs text-slate-600 font-black">/ {e.total_coupons}</span></p>
-                                    </td>
-                                    <td className="py-5 px-2">
-                                        <span className={`px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${e.status === 'ACTIVE' ? 'bg-emerald-500/10 text-emerald-400' :
-                                            e.status === 'FOOD_EXHAUSTED' ? 'bg-amber-500/10 text-amber-400' :
-                                                'bg-slate-700 text-slate-400'
-                                            }`}>
-                                            {e.status.replace('_', ' ')}
-                                        </span>
-                                    </td>
-                                    <td className="py-5 px-2 text-right space-x-2">
-                                        <button onClick={() => { setSelectedEntry(e); setShowAdjustment(true); }} className="text-[10px] font-black uppercase tracking-widest bg-slate-800 hover:bg-emerald-500 hover:text-slate-950 px-4 py-2 rounded-xl transition-all">Adjust</button>
-                                        <button onClick={() => handleStatusToggle(e)} className="text-[10px] font-black uppercase tracking-widest bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-xl transition-all">{e.status === 'CLOSED' ? 'Open' : 'Close'}</button>
-                                        <button onClick={() => handleOpenHistory(e)} className="text-[10px] font-black uppercase tracking-widest bg-slate-800 hover:bg-blue-500 hover:text-white px-4 py-2 rounded-xl transition-all">History</button>
-                                    </td>
+                {/* Families Table */}
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse">
+                            <thead>
+                                <tr className="bg-slate-800/50 border-b border-slate-800 text-slate-400 text-[10px] font-bold uppercase tracking-wider">
+                                    <th className="py-4 px-6">ID</th>
+                                    <th className="py-4 px-4">Family</th>
+                                    <th className="py-4 px-4 text-center">Members</th>
+                                    <th className="py-4 px-4 text-center">Plates</th>
+                                    <th className="py-4 px-4 text-center">Status</th>
+                                    <th className="py-4 px-6 text-right">Actions</th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                    {isLoading && <p className="text-center py-12 font-black text-slate-600 tracking-widest uppercase animate-pulse">Syncing Entries…</p>}
-                    {!isLoading && filtered.length === 0 && <p className="text-center py-20 text-slate-500 font-black text-xl">No active entries matching search.</p>}
+                            </thead>
+                            <tbody className="divide-y divide-slate-800">
+                                {filtered.map((f) => (
+                                    <tr key={f.family_id} className="hover:bg-slate-800/30 transition-colors">
+                                        <td className="py-4 px-6">
+                                            <span className="text-xs font-mono text-slate-500">{f.family_id}</span>
+                                        </td>
+                                        <td className="py-4 px-4">
+                                            <p className="font-bold text-white leading-tight">{f.family_name}</p>
+                                            <p className="text-sm text-slate-500">{f.head_name}</p>
+                                            <p className="text-xs text-slate-600 font-mono">{f.phone}</p>
+                                        </td>
+                                        <td className="py-4 px-4 text-center">
+                                            <span className="text-lg font-bold text-slate-300">{f.members_count}</span>
+                                        </td>
+                                        <td className="py-4 px-4 text-center">
+                                            <p className="font-bold text-lg text-emerald-400">
+                                                {f.plates_remaining} <span className="text-xs text-slate-500 font-normal">/ {f.plates_entitled}</span>
+                                            </p>
+                                            <p className="text-[10px] text-slate-500">{f.plates_used} served</p>
+                                        </td>
+                                        <td className="py-4 px-4 text-center">
+                                            {f.checked_in_at ? (
+                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
+                                                    Checked In
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border bg-slate-800 text-slate-400 border-slate-700">
+                                                    Not Arrived
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td className="py-4 px-6 text-right space-x-1">
+                                            {f.checked_in_at && (
+                                                <button
+                                                    onClick={() => { setSelectedFamily(f); setShowAdjustment(true); }}
+                                                    className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-lg border border-slate-700 hover:bg-slate-800 transition-all"
+                                                >
+                                                    Adjust
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={() => handleOpenHistory(f)}
+                                                className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-lg bg-slate-800 text-slate-200 hover:bg-slate-700 transition-all"
+                                            >
+                                                History
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
+
+                {isLoading && (
+                    <p className="text-center py-12 text-sm font-bold text-slate-400 tracking-widest uppercase animate-pulse">
+                        Loading...
+                    </p>
+                )}
+                {!isLoading && filtered.length === 0 && (
+                    <p className="text-center py-20 text-slate-400 font-bold">
+                        {search ? `No families matching "${search}"` : 'No families in system. Click "Sync from Sheet" to import.'}
+                    </p>
+                )}
             </div>
 
-            {/* History Modal (Audit Trail) */}
-            {selectedEntry && !showAdjustment && history.length > 0 && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md p-4">
-                    <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-[2.5rem] p-10 max-h-[85vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
-                        <div className="flex justify-between items-center mb-10">
+            {/* History Modal */}
+            {selectedFamily && !showAdjustment && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-4">
+                    <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col max-h-[85vh]">
+                        <div className="flex justify-between items-center p-6 border-b border-slate-800">
                             <div>
-                                <h3 className="text-xs font-black text-blue-400 uppercase tracking-widest mb-1">Audit Trail</h3>
-                                <h2 className="text-3xl font-black">{selectedEntry.surname} Family</h2>
+                                <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-1">Audit Trail</p>
+                                <h2 className="text-xl font-bold text-white">{selectedFamily.family_name} ({selectedFamily.family_id})</h2>
                             </div>
-                            <button onClick={() => setSelectedEntry(null)} className="w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center text-2xl font-black text-slate-500 hover:text-white">×</button>
+                            <button onClick={() => setSelectedFamily(null)} className="w-10 h-10 rounded-full hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-200 transition-colors">
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
                         </div>
-                        <div className="flex-1 overflow-y-auto space-y-6 pr-4">
-                            {history.map(log => (
-                                <div key={log.id} className="relative pl-8 before:absolute before:left-0 before:top-4 before:w-2 before:h-2 before:bg-blue-500 before:rounded-full before:shadow-[0_0_10px_rgba(59,130,246,1)]">
-                                    <div className="bg-slate-800/40 p-5 rounded-3xl border border-slate-700/50">
-                                        <div className="flex justify-between items-start mb-3">
-                                            <span className={`text-[10px] font-black uppercase px-3 py-1 rounded-full ${log.action_type === 'CHECK_IN' ? 'bg-emerald-500 text-slate-950' :
-                                                log.action_type === 'CONSUME' ? 'bg-blue-500 text-white' :
-                                                    'bg-amber-500 text-slate-950'
-                                                }`}>
-                                                {log.action_type}
-                                            </span>
-                                            <span className="text-[10px] text-slate-500 font-black uppercase tracking-tighter">{new Date(log.created_at).toLocaleTimeString()}</span>
-                                        </div>
-                                        <p className="text-base font-bold text-slate-200 mb-2">{log.details}</p>
-                                        <p className="text-[10px] text-slate-600 font-black tracking-widest uppercase">Operator: {log.actor_role}</p>
+                        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                            {isHistoryLoading && <p className="text-slate-500 animate-pulse">Loading history...</p>}
+                            {!isHistoryLoading && history.length === 0 && <p className="text-slate-500">No history recorded yet.</p>}
+                            {history.map((log) => (
+                                <div key={log.id} className="border-l-2 border-slate-800 pl-6 pb-2 relative">
+                                    <div className="absolute -left-[5px] top-1 w-2 h-2 rounded-full bg-slate-700" />
+                                    <div className="flex justify-between items-center mb-1">
+                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${log.action_type === 'CHECK_IN' ? 'bg-emerald-500/10 text-emerald-400' :
+                                                log.action_type === 'SERVE' ? 'bg-blue-500/10 text-blue-400' :
+                                                    'bg-amber-500/10 text-amber-400'
+                                            }`}>
+                                            {log.action_type}
+                                        </span>
+                                        <span className="text-[10px] text-slate-500 font-mono">
+                                            {new Date(log.created_at).toLocaleString()}
+                                        </span>
                                     </div>
+                                    <p className="text-sm text-slate-300 mb-1">{log.details}</p>
+                                    <p className="text-[10px] text-slate-500 uppercase tracking-wider">
+                                        {log.actor_role} {log.station_id ? `@ ${log.station_id}` : ''}
+                                    </p>
                                 </div>
                             ))}
                         </div>
@@ -234,40 +353,72 @@ export default function AdminDashboard() {
             )}
 
             {/* Adjustment Modal */}
-            {showAdjustment && selectedEntry && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md p-4">
-                    <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-[2.5rem] p-10 shadow-2xl animate-in zoom-in-95 duration-200">
-                        <h2 className="text-3xl font-black mb-2">Adjust Count</h2>
-                        <p className="text-sm text-slate-500 mb-10 font-black uppercase tracking-widest">{selectedEntry.surname} • {selectedEntry.head_name}</p>
+            {showAdjustment && selectedFamily && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-4">
+                    <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl shadow-2xl p-8">
+                        <h2 className="text-xl font-bold text-white mb-1">Adjust Plates</h2>
+                        <p className="text-xs text-slate-500 mb-8 font-bold uppercase tracking-wider">
+                            {selectedFamily.family_name} ({selectedFamily.family_id})
+                        </p>
 
-                        <div className="space-y-6 mb-10">
+                        <div className="space-y-6 mb-8">
                             <div>
-                                <label className="block text-[10px] font-black text-slate-500 uppercase mb-4 tracking-widest text-center">Plates Adjustment (+ or -)</label>
-                                <div className="flex items-center gap-6">
-                                    <button onClick={() => setAdjustmentValue(v => v - 1)} className="w-16 h-16 bg-slate-800 rounded-3xl text-3xl font-black hover:bg-slate-700 active:scale-95 transition-all">-</button>
+                                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-3 tracking-wider text-center">
+                                    Adjustment (+/-)
+                                </label>
+                                <div className="flex items-center gap-4">
+                                    <button onClick={() => setAdjustmentValue(v => v - 1)} className="w-12 h-12 flex items-center justify-center bg-slate-800 rounded-xl text-xl font-bold hover:bg-slate-700 active:scale-95 transition-all">-</button>
                                     <input
                                         type="number"
                                         value={adjustmentValue}
-                                        onChange={e => setAdjustmentValue(Number(e.target.value))}
-                                        className="flex-1 bg-slate-950 text-center text-4xl font-black py-4 rounded-3xl outline-none border-4 border-slate-800 focus:border-emerald-500 transition-all font-mono"
+                                        onChange={(e) => setAdjustmentValue(Number(e.target.value))}
+                                        className="flex-1 bg-slate-950 text-center text-3xl font-bold py-2 rounded-xl border border-slate-800 focus:border-emerald-500 outline-none font-mono"
                                     />
-                                    <button onClick={() => setAdjustmentValue(v => v + 1)} className="w-16 h-16 bg-emerald-500 text-slate-950 rounded-3xl text-3xl font-black hover:bg-emerald-400 active:scale-95 transition-all">+</button>
+                                    <button onClick={() => setAdjustmentValue(v => v + 1)} className="w-12 h-12 flex items-center justify-center bg-emerald-500 text-white rounded-xl text-xl font-bold hover:bg-emerald-600 active:scale-95 transition-all">+</button>
                                 </div>
                             </div>
                             <div>
-                                <label className="block text-[10px] font-black text-slate-500 uppercase mb-3 tracking-widest">Reason for Audit Log</label>
+                                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-2 tracking-wider">Reason (for audit)</label>
                                 <textarea
                                     value={adjReason}
-                                    onChange={e => setAdjReason(e.target.value)}
-                                    placeholder="e.g., Guest added manually or Correction"
-                                    className="w-full bg-slate-950 rounded-3xl p-5 text-sm font-black outline-none border-4 border-slate-800 focus:border-emerald-500 transition-all h-32 resize-none placeholder:text-slate-800"
+                                    onChange={(e) => setAdjReason(e.target.value)}
+                                    placeholder="e.g., Correction, Guest added..."
+                                    className="w-full bg-slate-950 rounded-xl p-4 text-sm border border-slate-800 focus:border-emerald-500 outline-none h-24 resize-none"
                                 />
                             </div>
                         </div>
 
                         <div className="flex flex-col gap-3">
-                            <button onClick={handleAdjustment} className="w-full py-5 font-black text-xl bg-emerald-500 text-slate-950 rounded-2xl shadow-xl shadow-emerald-500/10 active:scale-95 transition-all">APPLY ADJUSTMENT</button>
-                            <button onClick={() => setShowAdjustment(false)} className="w-full py-4 font-black text-slate-500 hover:text-white transition-colors">CANCEL</button>
+                            <button onClick={handleAdjustment} className="w-full py-4 font-bold bg-emerald-500 text-white rounded-xl hover:bg-emerald-600 active:scale-95 transition-all">
+                                Apply Adjustment
+                            </button>
+                            <button onClick={() => setShowAdjustment(false)} className="w-full py-2 text-sm font-bold text-slate-500 hover:text-slate-300 transition-colors">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Confirmation Modal */}
+            {confirmConfig.show && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-4">
+                    <div className="bg-slate-900 border border-slate-800 w-full max-w-sm rounded-xl shadow-2xl p-6">
+                        <h3 className="text-xl font-bold text-white mb-2">{confirmConfig.title}</h3>
+                        <p className="text-sm text-slate-400 mb-8">{confirmConfig.message}</p>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setConfirmConfig(prev => ({ ...prev, show: false }))}
+                                className="flex-1 py-3 px-4 rounded border border-slate-700 font-bold text-sm text-slate-400 hover:bg-slate-800 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={confirmConfig.onConfirm}
+                                className="flex-1 py-3 px-4 rounded bg-red-600 text-white font-bold text-sm hover:bg-red-700 transition-colors"
+                            >
+                                Confirm
+                            </button>
                         </div>
                     </div>
                 </div>
