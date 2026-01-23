@@ -54,9 +54,9 @@ export default function FoodCounterPage() {
     const trimmed = search.trim().toLowerCase();
     if (!trimmed) return families;
     return families.filter((f) =>
-      f.family_name.toLowerCase().includes(trimmed) ||
+      f.surname.toLowerCase().includes(trimmed) ||
       f.head_name.toLowerCase().includes(trimmed) ||
-      f.phone.includes(trimmed)
+      (f.phone && f.phone.includes(trimmed))
     );
   }, [families, search]);
 
@@ -158,18 +158,18 @@ export default function FoodCounterPage() {
         <section className="flex-1 overflow-y-auto pb-6 space-y-4">
           {/* Active families with plates remaining */}
           {activeFamilies.map((family) => {
-            const isProcessingThis = isProcessing === family.family_id;
+            const isProcessingThis = isProcessing === family.id;
             const globalProcessing = isProcessing !== null;
 
             return (
               <div
-                key={family.family_id}
+                key={family.id}
                 className={`w-full rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 transition-all relative overflow-hidden ${isProcessingThis ? 'ring-2 ring-emerald-500 scale-[0.98]' : ''}`}
               >
                 <div className="flex items-start justify-between mb-6">
                   <div className="flex-1 mr-4">
                     <h2 className="text-xl font-bold text-slate-900 dark:text-white leading-tight mb-1">
-                      {family.family_name}
+                      {family.surname}
                     </h2>
                     <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">
                       {family.head_name}
@@ -195,11 +195,11 @@ export default function FoodCounterPage() {
                     <button
                       key={num}
                       type="button"
-                      onClick={() => handleServe(family.family_id, num)}
+                      onClick={() => handleServe(family.id, num)}
                       disabled={family.plates_remaining < num || globalProcessing}
                       className={`rounded-xl py-4 text-lg font-bold transition-all shadow-sm active:scale-95 disabled:opacity-50 border ${family.plates_remaining >= num
-                          ? 'bg-emerald-500 border-emerald-600 text-white'
-                          : 'bg-slate-50 dark:bg-slate-950 text-slate-300 dark:text-slate-700 border-slate-100 dark:border-slate-800 cursor-not-allowed'
+                        ? 'bg-emerald-500 border-emerald-600 text-white'
+                        : 'bg-slate-50 dark:bg-slate-950 text-slate-300 dark:text-slate-700 border-slate-100 dark:border-slate-800 cursor-not-allowed'
                         }`}
                     >
                       {isProcessingThis ? '…' : `+${num}`}
@@ -225,12 +225,12 @@ export default function FoodCounterPage() {
               </p>
               {exhaustedFamilies.map((family) => (
                 <div
-                  key={family.family_id}
+                  key={family.id}
                   className="w-full rounded-xl border border-slate-800 bg-slate-900/50 p-4 mb-2 opacity-60"
                 >
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm font-bold text-slate-400">{family.family_name}</p>
+                      <p className="text-sm font-bold text-slate-400">{family.surname}</p>
                       <p className="text-[10px] text-slate-600">{family.head_name}</p>
                     </div>
                     <span className="text-xs font-bold text-red-500/70 uppercase">0 / {family.plates_entitled}</span>

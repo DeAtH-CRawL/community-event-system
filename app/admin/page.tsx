@@ -64,18 +64,29 @@ export default function AdminDashboard() {
         setIsSyncing(true);
         setSyncResult(null);
         try {
-            const response = await fetch('/api/sync', {
+            const response = await fetch('/api/sync-families', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ stationId: 'Admin Panel' }),
             });
             const data = await response.json();
-            setSyncResult({ success: data.success, message: data.message });
+
             if (data.success) {
+                setSyncResult({
+                    success: true,
+                    // "✓ Sync complete! Total: X Synced: Y Skipped: Z Errors: A"
+                    message: `✓ Sync complete! Total: ${data.stats.total}, Synced: ${data.stats.synced}, Skipped: ${data.stats.skipped}, Errors: ${data.stats.errors}`
+                });
                 loadData();
+            } else {
+                setSyncResult({
+                    success: false,
+                    message: `⚠ Sync failed. ${data.errors?.length ? data.errors.join(', ') : 'Unknown error'}`
+                });
+                console.error('Sync errors:', data.errors);
             }
         } catch (err) {
-            setSyncResult({ success: false, message: 'Sync failed. Check connection.' });
+            setSyncResult({ success: false, message: '✗ Sync failed. Check network connection.' });
+            console.error('Sync exception:', err);
         } finally {
             setIsSyncing(false);
         }
@@ -108,9 +119,9 @@ export default function AdminDashboard() {
         const q = search.trim().toLowerCase();
         if (!q) return families;
         return families.filter((f) =>
-            f.family_name.toLowerCase().includes(q) ||
+            f.surname.toLowerCase().includes(q) ||
             f.head_name.toLowerCase().includes(q) ||
-            f.phone.includes(q)
+            (f.phone && f.phone.includes(q))
         );
     }, [families, search]);
 
@@ -119,7 +130,7 @@ export default function AdminDashboard() {
         setHistory([]);
         setIsHistoryLoading(true);
         try {
-            const data = await getAuditHistory(DEFAULT_EVENT, family.family_id);
+            const data = await getAuditHistory(DEFAULT_EVENT, family.id);
             setHistory(data);
         } catch (err) {
             console.error(err);
@@ -134,7 +145,7 @@ export default function AdminDashboard() {
             const res = await adjustPlates({
                 role: 'admin',
                 eventName: DEFAULT_EVENT,
-                familyId: selectedFamily.family_id,
+                familyId: selectedFamily.id,
                 adjustment: adjustmentValue,
                 reason: adjReason || `Admin adjustment: ${adjustmentValue > 0 ? '+' : ''}${adjustmentValue} plates.`,
             });
@@ -173,7 +184,7 @@ export default function AdminDashboard() {
                                     Syncing...
                                 </>
                             ) : (
-                                '↓ Sync from Sheet'
+                                'Sync from Google Sheet'
                             )}
                         </button>
                         {/* Reset Button */}
@@ -247,17 +258,17 @@ export default function AdminDashboard() {
                             </thead>
                             <tbody className="divide-y divide-slate-800">
                                 {filtered.map((f) => (
-                                    <tr key={f.family_id} className="hover:bg-slate-800/30 transition-colors">
+                                    <tr key={f.id} className="hover:bg-slate-800/30 transition-colors">
                                         <td className="py-4 px-6">
-                                            <span className="text-xs font-mono text-slate-500">{f.family_id}</span>
+                                            <span className="text-xs font-mono text-slate-500">{f.id}</span>
                                         </td>
                                         <td className="py-4 px-4">
-                                            <p className="font-bold text-white leading-tight">{f.family_name}</p>
+                                            <p className="font-bold text-white leading-tight">{f.surname}</p>
                                             <p className="text-sm text-slate-500">{f.head_name}</p>
                                             <p className="text-xs text-slate-600 font-mono">{f.phone}</p>
                                         </td>
                                         <td className="py-4 px-4 text-center">
-                                            <span className="text-lg font-bold text-slate-300">{f.members_count}</span>
+                                            <span className="text-lg font-bold text-slate-300">{f.family_size}</span>
                                         </td>
                                         <td className="py-4 px-4 text-center">
                                             <p className="font-bold text-lg text-emerald-400">
@@ -318,7 +329,7 @@ export default function AdminDashboard() {
                         <div className="flex justify-between items-center p-6 border-b border-slate-800">
                             <div>
                                 <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-1">Audit Trail</p>
-                                <h2 className="text-xl font-bold text-white">{selectedFamily.family_name} ({selectedFamily.family_id})</h2>
+                                <h2 className="text-xl font-bold text-white">{selectedFamily.surname} ({selectedFamily.id})</h2>
                             </div>
                             <button onClick={() => setSelectedFamily(null)} className="w-10 h-10 rounded-full hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-200 transition-colors">
                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
@@ -332,8 +343,8 @@ export default function AdminDashboard() {
                                     <div className="absolute -left-[5px] top-1 w-2 h-2 rounded-full bg-slate-700" />
                                     <div className="flex justify-between items-center mb-1">
                                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${log.action_type === 'CHECK_IN' ? 'bg-emerald-500/10 text-emerald-400' :
-                                                log.action_type === 'SERVE' ? 'bg-blue-500/10 text-blue-400' :
-                                                    'bg-amber-500/10 text-amber-400'
+                                            log.action_type === 'SERVE' ? 'bg-blue-500/10 text-blue-400' :
+                                                'bg-amber-500/10 text-amber-400'
                                             }`}>
                                             {log.action_type}
                                         </span>
@@ -358,7 +369,7 @@ export default function AdminDashboard() {
                     <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl shadow-2xl p-8">
                         <h2 className="text-xl font-bold text-white mb-1">Adjust Plates</h2>
                         <p className="text-xs text-slate-500 mb-8 font-bold uppercase tracking-wider">
-                            {selectedFamily.family_name} ({selectedFamily.family_id})
+                            {selectedFamily.surname} ({selectedFamily.id})
                         </p>
 
                         <div className="space-y-6 mb-8">

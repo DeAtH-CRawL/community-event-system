@@ -62,14 +62,14 @@ export default function EntryGatePage() {
       const result = await checkInFamily({
         role: 'volunteer',
         eventName: DEFAULT_EVENT,
-        familyId: selectedFamily.family_id,
+        familyId: selectedFamily.id,
         stationId: stationId,
       });
 
       if (!result.success) {
         window.alert(result.message || 'Check-in failed.');
       } else {
-        window.alert(`✓ ${selectedFamily.family_name} checked in! ${selectedFamily.plates_entitled} plates entitled.`);
+        window.alert(`✓ ${selectedFamily.surname} checked in! ${selectedFamily.plates_entitled} plates entitled.`);
         setSearch('');
         setResults([]);
       }
@@ -136,7 +136,7 @@ export default function EntryGatePage() {
             const isCheckedIn = !!family.checked_in_at;
             return (
               <button
-                key={family.family_id}
+                key={family.id}
                 type="button"
                 onClick={() => !isCheckedIn && setSelectedFamily(family)}
                 disabled={isCheckedIn}
@@ -147,9 +147,9 @@ export default function EntryGatePage() {
               >
                 <div className="flex justify-between items-center mb-1.5">
                   <div className="flex items-center gap-3">
-                    {/* FIXED: Show family_name instead of surname */}
+                    {/* FIXED: Show surname instead of family_name */}
                     <h2 className={`text-xl font-bold transition-colors ${isCheckedIn ? 'text-slate-400' : 'text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400'}`}>
-                      {family.family_name}
+                      {family.surname}
                     </h2>
                     {isCheckedIn && (
                       <span className="bg-amber-100 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide border border-amber-200 dark:border-amber-500/20">
@@ -157,10 +157,10 @@ export default function EntryGatePage() {
                       </span>
                     )}
                   </div>
-                  {/* FIXED: Show members_count and plates_remaining clearly */}
+                  {/* FIXED: Show family_size and plates_remaining clearly */}
                   <div className="text-right">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                      Members: {family.members_count}
+                      Members: {family.family_size}
                     </span>
                     <span className={`text-sm font-bold ${family.plates_remaining > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
                       {family.plates_remaining} plates left
@@ -179,7 +179,7 @@ export default function EntryGatePage() {
             );
           })}
 
-          {/* FIXED: Show clear reason why no results */}
+          {/* No Results Message */}
           {search.length >= 2 && results.length === 0 && !isLoading && (
             <div className="text-center py-12">
               <p className="text-xl font-bold text-slate-500">No family found</p>
@@ -210,7 +210,7 @@ export default function EntryGatePage() {
                   Confirm Check-In
                 </p>
                 <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">
-                  {selectedFamily.family_name}
+                  {selectedFamily.surname}
                 </h2>
                 <p className="text-lg text-slate-500 dark:text-slate-400 font-medium mb-1">
                   {selectedFamily.head_name}
@@ -225,7 +225,7 @@ export default function EntryGatePage() {
                 <div className="grid grid-cols-2 gap-4 text-center">
                   <div>
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Members</p>
-                    <p className="text-2xl font-bold text-slate-900 dark:text-white">{selectedFamily.members_count}</p>
+                    <p className="text-2xl font-bold text-slate-900 dark:text-white">{selectedFamily.family_size}</p>
                   </div>
                   <div>
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Plates Entitled</p>
