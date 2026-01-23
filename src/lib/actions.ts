@@ -18,6 +18,7 @@ export type Family = {
   notes?: string | null;
 
   // Computed
+  additional_guests: number;
   plates_entitled: number;
   plates_used: number;
   plates_remaining: number;
@@ -66,15 +67,23 @@ async function logAudit(params: {
 // =============================================================================
 export async function searchFamilies(query: string, eventName: string): Promise<Family[]> {
   const cleanQuery = query.trim().toLowerCase();
+  console.log(`[Search] Query: "${query}", Clean: "${cleanQuery}"`);
+
   if (cleanQuery.length < 2) return [];
 
   try {
+
     // FIX: Read all families and filter in-memory to ensure matching logic with Admin
+    // Error 42703: notes column does not exist, removed from query
     const { data: allFamilies, error } = await supabase
       .from('families')
-      .select('id, surname, head_name, phone, family_size, notes');
+      .select('id, surname, head_name, phone, family_size'); // Removed notes
 
-    if (error || !allFamilies) return [];
+    if (error) {
+      console.error('[Search] Supabase Error:', error);
+      return [];
+    }
+
 
     const families = allFamilies.filter(f =>
       (f.surname?.toLowerCase() || '').includes(cleanQuery) ||
@@ -87,7 +96,7 @@ export async function searchFamilies(query: string, eventName: string): Promise<
     const familyIds = families.map(f => f.id);
     const { data: servings } = await supabase
       .from('servings')
-      .select('family_id, plates_used, checked_in_at')
+      .select('family_id, plates_used, additional_guests, checked_in_at')
       .eq('event_name', eventName)
       .in('family_id', familyIds);
 
@@ -96,16 +105,20 @@ export async function searchFamilies(query: string, eventName: string): Promise<
     return families.map(f => {
       const s = servingMap.get(f.id);
       const used = s?.plates_used || 0;
+      const guests = s?.additional_guests || 0;
+      const totalEntitled = f.family_size + guests;
+
       return {
         id: f.id,
         surname: f.surname,
         head_name: f.head_name,
         phone: f.phone || null,
         family_size: f.family_size,
-        notes: f.notes,
-        plates_entitled: f.family_size,
+        notes: null, // Column missing in DB
+        additional_guests: guests,
+        plates_entitled: totalEntitled,
         plates_used: used,
-        plates_remaining: f.family_size - used,
+        plates_remaining: totalEntitled - used,
         checked_in_at: s?.checked_in_at || null
       };
     });
@@ -123,9 +136,10 @@ export async function checkInFamily(params: {
   role: UserRole;
   eventName: string;
   familyId: string;
+  guestCount: number;
   stationId?: string;
 }) {
-  const { familyId, eventName } = params;
+  const { familyId, eventName, guestCount } = params;
 
   const { data: family } = await supabase
     .from('families')
@@ -154,6 +168,7 @@ export async function checkInFamily(params: {
         event_name: eventName,
         family_id: familyId,
         checked_in_at: now,
+        additional_guests: guestCount,
         ...(existing ? {} : { plates_used: 0 })
       },
       { onConflict: 'event_name, family_id' }
@@ -164,12 +179,13 @@ export async function checkInFamily(params: {
     eventName,
     familyId,
     actionType: 'CHECK_IN',
-    details: `Checked in ${family.surname} family`,
+    details: `Checked in ${family.surname} family with ${guestCount} guests`,
     stationId: params.stationId
   });
 
   revalidatePath('/entry');
   revalidatePath('/food');
+  revalidatePath('/admin');
   return { success: true };
 }
 
@@ -187,11 +203,11 @@ export async function servePlates(params: {
   if (quantity < 1) return { success: false, message: 'Invalid quantity' };
 
   const { data: family } = await supabase.from('families').select('family_size').eq('id', familyId).single();
-  const { data: serving } = await supabase.from('servings').select('plates_used, id').eq('event_name', params.eventName).eq('family_id', familyId).single();
+  const { data: serving } = await supabase.from('servings').select('plates_used, additional_guests, id').eq('event_name', params.eventName).eq('family_id', familyId).single();
 
   if (!family || !serving) return { success: false, message: 'Not checked in' };
 
-  const limit = family.family_size;
+  const limit = family.family_size + (serving.additional_guests || 0);
   const used = serving.plates_used;
 
   if (used + quantity > limit) {
@@ -218,6 +234,7 @@ export async function servePlates(params: {
   });
 
   revalidatePath('/food');
+  revalidatePath('/admin');
   return { success: true };
 }
 
@@ -267,6 +284,48 @@ export async function adjustPlates(params: {
   return { success: true };
 }
 
+export async function updateGuestCount(params: {
+  role: UserRole;
+  eventName: string;
+  familyId: string;
+  guestCount: number;
+  stationId?: string;
+}) {
+  const { familyId, guestCount, eventName } = params;
+
+  const { data: serving } = await supabase
+    .from('servings')
+    .select('id, additional_guests')
+    .eq('event_name', eventName)
+    .eq('family_id', familyId)
+    .single();
+
+  if (!serving) return { success: false, message: 'Record not found' };
+
+  const oldGuests = serving.additional_guests;
+
+  await supabase
+    .from('servings')
+    .update({ additional_guests: guestCount, last_updated: new Date().toISOString() })
+    .eq('id', serving.id);
+
+  await logAudit({
+    role: params.role,
+    eventName,
+    familyId,
+    actionType: 'UPDATE_GUESTS',
+    details: `Updated guests from ${oldGuests} to ${guestCount}`,
+    stationId: params.stationId,
+    before: { additional_guests: oldGuests },
+    after: { additional_guests: guestCount }
+  });
+
+  revalidatePath('/entry');
+  revalidatePath('/food');
+  revalidatePath('/admin');
+  return { success: true };
+}
+
 // =============================================================================
 // ADMIN: READS
 // =============================================================================
@@ -280,18 +339,23 @@ export async function getCheckedInFamilies(eventName: string): Promise<Family[]>
 
   if (!servings) return [];
 
-  return servings.map((s: any) => ({
-    id: s.family_id,
-    surname: s.families.surname,
-    head_name: s.families.head_name,
-    phone: s.families.phone,
-    family_size: s.families.family_size,
-    notes: s.families.notes,
-    plates_entitled: s.families.family_size,
-    plates_used: s.plates_used,
-    plates_remaining: s.families.family_size - s.plates_used,
-    checked_in_at: s.checked_in_at
-  }));
+  return servings.map((s: any) => {
+    const guests = s.additional_guests || 0;
+    const totalEntitled = s.families.family_size + guests;
+    return {
+      id: s.family_id,
+      surname: s.families.surname,
+      head_name: s.families.head_name,
+      phone: s.families.phone,
+      family_size: s.families.family_size,
+      notes: s.families.notes,
+      additional_guests: guests,
+      plates_entitled: totalEntitled,
+      plates_used: s.plates_used,
+      plates_remaining: totalEntitled - s.plates_used,
+      checked_in_at: s.checked_in_at
+    };
+  });
 }
 
 export async function getAllFamiliesWithStatus(eventName: string): Promise<Family[]> {
@@ -304,7 +368,7 @@ export async function getAllFamiliesWithStatus(eventName: string): Promise<Famil
 
   const { data: servings } = await supabase
     .from('servings')
-    .select('family_id, plates_used, checked_in_at')
+    .select('family_id, plates_used, checked_in_at, additional_guests')
     .eq('event_name', eventName);
 
   const sMap = new Map(servings?.map(s => [s.family_id, s]) || []);
@@ -312,6 +376,9 @@ export async function getAllFamiliesWithStatus(eventName: string): Promise<Famil
   return families.map(f => {
     const s = sMap.get(f.id);
     const used = s?.plates_used || 0;
+    const guests = s?.additional_guests || 0;
+    const totalEntitled = f.family_size + guests;
+
     return {
       id: f.id,
       surname: f.surname,
@@ -319,9 +386,10 @@ export async function getAllFamiliesWithStatus(eventName: string): Promise<Famil
       phone: f.phone,
       family_size: f.family_size,
       notes: f.notes,
-      plates_entitled: f.family_size,
+      additional_guests: guests,
+      plates_entitled: totalEntitled,
       plates_used: used,
-      plates_remaining: f.family_size - used,
+      plates_remaining: totalEntitled - used,
       checked_in_at: s?.checked_in_at
     };
   });
@@ -339,10 +407,14 @@ export async function getEventStats(eventName: string) {
   // Total Families
   const { count: totalFamilies } = await supabase.from('families').select('*', { count: 'exact', head: true });
 
-  // Total Plates Entitled (Sum of all family sizes)
-  // Need to fetch all to sum unless we use a db function, but fetching id,family_size is cheap enough for < 2000 rows
+  // Total Plates Entitled (Sum of all family sizes + sum of all additional guests)
   const { data: allSizes } = await supabase.from('families').select('family_size');
-  const totalEntitled = (allSizes || []).reduce((sum, f) => sum + f.family_size, 0);
+  const baseEntitled = (allSizes || []).reduce((sum, f) => sum + f.family_size, 0);
+
+  const { data: allGuests } = await supabase.from('servings').select('additional_guests').eq('event_name', eventName);
+  const guestEntitled = (allGuests || []).reduce((sum, s) => sum + (s.additional_guests || 0), 0);
+
+  const totalEntitled = baseEntitled + guestEntitled;
 
   // Servings Stats
   const { data: servings } = await supabase
@@ -357,11 +429,7 @@ export async function getEventStats(eventName: string) {
   return {
     totalFamilies: totalFamilies || 0,
     familiesCheckedIn: checkedIn,
-    totalPlatesEntitled: totalEntitled, // Returns total capacity of database, or checked in capacity? 
-    // Previous code logic was "total plates entitled for checked-in families". 
-    // Let's stick to that if that's what Admin expects, OR standard stats usually imply total potential.
-    // The previous implementation (Step 171) did: `totalPlatesEntitled` for CHECKED IN families.
-    // Let's match that to be safe.
+    totalPlatesEntitled: totalEntitled,
     totalPlatesServed: served
   };
 }
@@ -371,7 +439,7 @@ export async function getEventStats_CheckedInOnly(eventName: string) {
 
   const { data: servings } = await supabase
     .from('servings')
-    .select('family_id, plates_used')
+    .select('family_id, plates_used, additional_guests')
     .eq('event_name', eventName)
     .not('checked_in_at', 'is', null);
 
@@ -381,8 +449,13 @@ export async function getEventStats_CheckedInOnly(eventName: string) {
   let entitled = 0;
   if (servings && servings.length > 0) {
     const ids = servings.map(s => s.family_id);
-    const { data: families } = await supabase.from('families').select('family_size').in('id', ids);
-    entitled = (families || []).reduce((a, b) => a + b.family_size, 0);
+    const { data: families } = await supabase.from('families').select('id, family_size').in('id', ids);
+    const familyMap = new Map((families || []).map(f => [f.id, f.family_size]));
+
+    entitled = servings.reduce((sum, s) => {
+      const fSize = familyMap.get(s.family_id) || 0;
+      return sum + fSize + (s.additional_guests || 0);
+    }, 0);
   }
 
   return {

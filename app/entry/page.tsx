@@ -12,6 +12,7 @@ export default function EntryGatePage() {
   const [selectedFamily, setSelectedFamily] = useState<Family | null>(null);
   const [stationId, setStationId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [guestCount, setGuestCount] = useState(0);
 
   // Load stationId from localStorage
   useEffect(() => {
@@ -63,15 +64,18 @@ export default function EntryGatePage() {
         role: 'volunteer',
         eventName: DEFAULT_EVENT,
         familyId: selectedFamily.id,
+        guestCount: guestCount,
         stationId: stationId,
       });
 
       if (!result.success) {
         window.alert(result.message || 'Check-in failed.');
       } else {
-        window.alert(`✓ ${selectedFamily.surname} checked in! ${selectedFamily.plates_entitled} plates entitled.`);
+        const total = selectedFamily.plates_entitled + guestCount;
+        window.alert(`✓ ${selectedFamily.surname} checked in! ${total} plates entitled.`);
         setSearch('');
         setResults([]);
+        setGuestCount(0);
       }
       setSelectedFamily(null);
     } catch (err) {
@@ -138,7 +142,12 @@ export default function EntryGatePage() {
               <button
                 key={family.id}
                 type="button"
-                onClick={() => !isCheckedIn && setSelectedFamily(family)}
+                onClick={() => {
+                  if (!isCheckedIn) {
+                    setSelectedFamily(family);
+                    setGuestCount(0);
+                  }
+                }}
                 disabled={isCheckedIn}
                 className={`w-full text-left rounded-2xl border border-slate-200 dark:border-slate-800 p-6 transition-all active:scale-[0.98] group ${isCheckedIn
                   ? 'bg-slate-50 dark:bg-slate-900/50 opacity-60 cursor-not-allowed grayscale'
@@ -234,6 +243,31 @@ export default function EntryGatePage() {
                 </div>
               </div>
 
+              {/* Guest Addition */}
+              <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4 border border-slate-200 dark:border-slate-700/50">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Additional Guests (Unlimited)</p>
+                <div className="flex items-center justify-center gap-4">
+                  <button
+                    onClick={() => setGuestCount(Math.max(0, guestCount - 1))}
+                    className="w-12 h-12 flex items-center justify-center rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-bold text-xl hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors"
+                  >
+                    -
+                  </button>
+                  <span className="text-3xl font-black text-slate-900 dark:text-white w-12 text-center">
+                    {guestCount}
+                  </span>
+                  <button
+                    onClick={() => setGuestCount(guestCount + 1)}
+                    className="w-12 h-12 flex items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold text-xl hover:bg-emerald-200 dark:hover:bg-emerald-500/30 transition-colors"
+                  >
+                    +
+                  </button>
+                </div>
+                <p className="text-xs text-center text-slate-400 mt-2">
+                  Total Plates: <span className="text-emerald-500 font-bold">{selectedFamily.plates_entitled + guestCount}</span>
+                </p>
+              </div>
+
               <div className="flex flex-col gap-3">
                 <button
                   type="button"
@@ -241,7 +275,7 @@ export default function EntryGatePage() {
                   disabled={isSaving}
                   className="w-full rounded-xl bg-emerald-500 text-white font-bold py-4 text-lg transition-all shadow-lg shadow-emerald-500/10 active:scale-95 disabled:opacity-50"
                 >
-                  {isSaving ? 'Checking in...' : `✓ Check In (${selectedFamily.plates_entitled} plates)`}
+                  {isSaving ? 'Checking in...' : `✓ Check In (${selectedFamily.plates_entitled + guestCount} plates)`}
                 </button>
                 <button
                   type="button"
@@ -254,15 +288,18 @@ export default function EntryGatePage() {
             </div>
           </div>
         </div>
-      )}
+      )
+      }
 
       {/* Loading Overlay */}
-      {isSaving && (
-        <div className="fixed inset-0 z-[100] bg-white/60 dark:bg-slate-950/60 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in duration-300">
-          <div className="w-12 h-12 border-4 border-slate-200 dark:border-slate-800 border-t-emerald-500 rounded-full animate-spin mb-4"></div>
-          <p className="text-slate-600 dark:text-slate-400 text-xs font-bold tracking-widest uppercase">Processing...</p>
-        </div>
-      )}
-    </main>
+      {
+        isSaving && (
+          <div className="fixed inset-0 z-[100] bg-white/60 dark:bg-slate-950/60 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in duration-300">
+            <div className="w-12 h-12 border-4 border-slate-200 dark:border-slate-800 border-t-emerald-500 rounded-full animate-spin mb-4"></div>
+            <p className="text-slate-600 dark:text-slate-400 text-xs font-bold tracking-widest uppercase">Processing...</p>
+          </div>
+        )
+      }
+    </main >
   );
 }

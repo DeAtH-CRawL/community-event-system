@@ -1,9 +1,11 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import { createClient } from '@supabase/supabase-js';
 import { getCheckedInFamilies, servePlates, type Family } from '@/src/lib/actions';
 
 const DEFAULT_EVENT = "Community Dinner 2024";
+const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
 
 export default function FoodCounterPage() {
   const [families, setFamilies] = useState<Family[]>([]);
@@ -45,8 +47,26 @@ export default function FoodCounterPage() {
 
   useEffect(() => {
     loadFamilies();
-    const interval = setInterval(loadFamilies, 30000);
-    return () => clearInterval(interval);
+
+    // Real-time subscription
+    const channel = supabase
+      .channel('schema-db-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'servings',
+        },
+        () => {
+          loadFamilies();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   // Filter families based on search
@@ -174,6 +194,11 @@ export default function FoodCounterPage() {
                     <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">
                       {family.head_name}
                     </p>
+                    {family.additional_guests > 0 && (
+                      <p className="text-[10px] text-emerald-500 font-bold mt-1">
+                        + {family.additional_guests} Guests
+                      </p>
+                    )}
                   </div>
                   <div className="text-right">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
@@ -185,6 +210,9 @@ export default function FoodCounterPage() {
                     </p>
                     <p className="text-[10px] text-slate-400 font-mono">
                       of {family.plates_entitled}
+                      <span className="block text-[8px] opacity-70">
+                        ({family.family_size} + {family.additional_guests})
+                      </span>
                     </p>
                   </div>
                 </div>

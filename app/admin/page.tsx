@@ -11,7 +11,10 @@ import {
     type AuditLogEntry,
 } from '@/src/lib/actions';
 
+import { createClient } from '@supabase/supabase-js';
+
 const DEFAULT_EVENT = "Community Dinner 2024";
+const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
 
 export default function AdminDashboard() {
     const [families, setFamilies] = useState<Family[]>([]);
@@ -57,6 +60,25 @@ export default function AdminDashboard() {
 
     useEffect(() => {
         loadData();
+
+        const channel = supabase
+            .channel('admin-db-changes')
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'servings',
+                },
+                () => {
+                    loadData();
+                }
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
     }, []);
 
     // Sync from Google Sheets
@@ -268,7 +290,10 @@ export default function AdminDashboard() {
                                             <p className="text-xs text-slate-600 font-mono">{f.phone}</p>
                                         </td>
                                         <td className="py-4 px-4 text-center">
-                                            <span className="text-lg font-bold text-slate-300">{f.family_size}</span>
+                                            <span className="text-lg font-bold text-slate-300">
+                                                {f.family_size}
+                                                {f.additional_guests > 0 && <span className="text-emerald-400 text-sm"> +{f.additional_guests}</span>}
+                                            </span>
                                         </td>
                                         <td className="py-4 px-4 text-center">
                                             <p className="font-bold text-lg text-emerald-400">
