@@ -5,7 +5,12 @@ import { createClient } from '@supabase/supabase-js';
 import { getCheckedInFamilies, servePlates, type Family } from '@/src/lib/actions';
 
 const DEFAULT_EVENT = "Community Dinner 2024";
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+
+// Init client-side supabase for subscribe
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 export default function FoodCounterPage() {
   const [families, setFamilies] = useState<Family[]>([]);
@@ -13,23 +18,14 @@ export default function FoodCounterPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessing, setIsProcessing] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<Date>(new Date());
-  const [isOnline, setIsOnline] = useState(true);
+
+  // Custom Serve Modal
+  const [selectedFamily, setSelectedFamily] = useState<Family | null>(null);
+  const [customQty, setCustomQty] = useState(1);
   const [stationId, setStationId] = useState('');
 
   useEffect(() => {
     setStationId(localStorage.getItem('station_id') || '');
-
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    setIsOnline(navigator.onLine);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
   }, []);
 
   const loadFamilies = async () => {
@@ -39,7 +35,7 @@ export default function FoodCounterPage() {
       setFamilies(Array.isArray(data) ? data : []);
       setLastSync(new Date());
     } catch (err) {
-      console.error('getCheckedInFamilies failed', err);
+      console.error(err);
     } finally {
       setIsLoading(false);
     }
@@ -48,20 +44,11 @@ export default function FoodCounterPage() {
   useEffect(() => {
     loadFamilies();
 
-    // Real-time subscription
-    const channel = supabase
-      .channel('schema-db-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'servings',
-        },
-        () => {
-          loadFamilies();
-        }
-      )
+    // REALTIME SUBSCRIPTION
+    const channel = supabase.channel('food-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'servings' }, () => {
+        loadFamilies(); // refresh on any change
+      })
       .subscribe();
 
     return () => {
@@ -69,223 +56,170 @@ export default function FoodCounterPage() {
     };
   }, []);
 
-  // Filter families based on search
   const filteredFamilies = useMemo(() => {
-    const trimmed = search.trim().toLowerCase();
-    if (!trimmed) return families;
+    const q = search.trim().toLowerCase();
+    if (!q) return families;
     return families.filter((f) =>
-      f.surname.toLowerCase().includes(trimmed) ||
-      f.head_name.toLowerCase().includes(trimmed) ||
-      (f.phone && f.phone.includes(trimmed))
+      f.surname.toLowerCase().includes(q) ||
+      f.head_name.toLowerCase().includes(q) ||
+      (f.phone && f.phone.includes(q))
     );
   }, [families, search]);
 
-  // Separate into active (has plates) and exhausted
   const activeFamilies = filteredFamilies.filter(f => f.plates_remaining > 0);
   const exhaustedFamilies = filteredFamilies.filter(f => f.plates_remaining === 0);
 
-  const handleServe = async (familyId: string, quantity: number) => {
-    if (quantity > 3) {
-      if (!window.confirm(`Serve ${quantity} plates? Please confirm.`)) return;
-    }
+  const handleServe = async () => {
+    if (!selectedFamily) return;
 
-    setIsProcessing(familyId);
+    setIsProcessing(selectedFamily.id);
     try {
       const result = await servePlates({
         role: 'volunteer',
         eventName: DEFAULT_EVENT,
-        familyId: familyId,
-        quantity: quantity,
-        stationId: stationId,
+        familyId: selectedFamily.id,
+        quantity: customQty,
+        stationId: stationId
       });
 
       if (!result.success) {
-        window.alert(result.message || 'Failed to serve plates.');
+        alert(result.message);
+      } else {
+        // Close modal on success
+        setSelectedFamily(null);
+        setCustomQty(1);
       }
-      // Refresh data after serving
-      await loadFamilies();
     } catch (err) {
-      window.alert('Connection error. Please check internet.');
+      alert('Failed to serve. Check internet.');
     } finally {
       setIsProcessing(null);
     }
+  };
+
+  const openServeModal = (f: Family) => {
+    setSelectedFamily(f);
+    setCustomQty(1); // Reset to 1 default
   };
 
   return (
     <main className="min-h-screen bg-slate-950 text-white flex flex-col">
       <div className="w-full max-w-xl mx-auto px-4 py-6 flex-1 flex flex-col">
         {/* Header */}
-        <header className="mb-8 flex justify-between items-start">
-          <div className="flex-1">
-            <div className="flex items-center gap-3 mb-1.5">
-              <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
-                Food Counter
-              </h1>
-              <div
-                className={`w-2.5 h-2.5 rounded-full ring-4 ring-white dark:ring-slate-900 ${isOnline ? 'bg-emerald-500' : 'bg-red-500 animate-pulse'}`}
-                title={isOnline ? 'Online' : 'Offline'}
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">
-                {isLoading ? 'Syncing…' : `Last Sync: ${lastSync.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
-              </p>
-              {!isOnline && (
-                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 text-[9px] font-bold uppercase tracking-widest border border-red-100 dark:border-red-500/20">
-                  Offline
-                </span>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {stationId && (
-              <div className="text-right px-3 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 shadow-sm">
-                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">STATION</p>
-                <p className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase leading-none">{stationId}</p>
-              </div>
-            )}
-            <button
-              onClick={loadFamilies}
-              title="Manual Sync"
-              className="p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-400 hover:text-slate-600 dark:hover:text-slate-100 transition-all active:scale-95 shadow-sm"
-            >
-              <svg className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            </button>
+        <header className="mb-6 flex justify-between items-center">
+          <h1 className="text-2xl font-bold">Food Counter</h1>
+          <div className="text-right">
+            <p className="text-[10px] uppercase text-slate-500 font-bold tracking-widest">
+              Last Sync: {lastSync.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </p>
+            {stationId && <p className="text-[10px] text-emerald-500 font-bold uppercase">{stationId}</p>}
           </div>
         </header>
 
-        {/* Search Bar */}
-        <div className="mb-8">
-          <div className="relative group">
-            <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none">
-              <svg className="w-5 h-5 text-slate-400 group-focus-within:text-emerald-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-            </div>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by Family Name or Phone…"
-              className="w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 pl-14 pr-6 py-4 text-xl font-bold placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 transition-all"
-            />
-          </div>
+        {/* Search */}
+        <div className="mb-6">
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search Family..."
+            className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-lg font-bold outline-none focus:border-emerald-500 transition-all"
+          />
         </div>
 
-        {/* Family Cards */}
-        <section className="flex-1 overflow-y-auto pb-6 space-y-4">
-          {/* Active families with plates remaining */}
-          {activeFamilies.map((family) => {
-            const isProcessingThis = isProcessing === family.id;
-            const globalProcessing = isProcessing !== null;
-
-            return (
-              <div
-                key={family.id}
-                className={`w-full rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 transition-all relative overflow-hidden ${isProcessingThis ? 'ring-2 ring-emerald-500 scale-[0.98]' : ''}`}
-              >
-                <div className="flex items-start justify-between mb-6">
-                  <div className="flex-1 mr-4">
-                    <h2 className="text-xl font-bold text-slate-900 dark:text-white leading-tight mb-1">
-                      {family.surname}
-                    </h2>
-                    <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">
-                      {family.head_name}
-                    </p>
-                    {family.additional_guests > 0 && (
-                      <p className="text-[10px] text-emerald-500 font-bold mt-1">
-                        + {family.additional_guests} Guests
-                      </p>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
-                      Plates Left
-                    </p>
-                    <p className={`text-4xl font-bold font-mono tracking-tighter transition-colors ${family.plates_remaining <= 2 ? 'text-amber-500' : 'text-emerald-600 dark:text-emerald-400'
-                      }`}>
-                      {family.plates_remaining}
-                    </p>
-                    <p className="text-[10px] text-slate-400 font-mono">
-                      of {family.plates_entitled}
-                      <span className="block text-[8px] opacity-70">
-                        ({family.family_size} + {family.additional_guests})
-                      </span>
-                    </p>
-                  </div>
+        {/* List */}
+        <div className="space-y-4 pb-10">
+          {activeFamilies.map(f => (
+            <div key={f.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 relative overflow-hidden">
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h3 className="text-xl font-bold text-white leading-tight">{f.surname}</h3>
+                  <p className="text-sm text-slate-500">{f.head_name}</p>
+                  {f.guests > 0 && (
+                    <span className="inline-block mt-1 text-[10px] font-bold bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded uppercase tracking-wide">
+                      + {f.guests} Guests
+                    </span>
+                  )}
                 </div>
-
-                {/* Quick serve buttons */}
-                <div className="grid grid-cols-3 gap-3">
-                  {[1, 2, 3].map((num) => (
-                    <button
-                      key={num}
-                      type="button"
-                      onClick={() => handleServe(family.id, num)}
-                      disabled={family.plates_remaining < num || globalProcessing}
-                      className={`rounded-xl py-4 text-lg font-bold transition-all shadow-sm active:scale-95 disabled:opacity-50 border ${family.plates_remaining >= num
-                        ? 'bg-emerald-500 border-emerald-600 text-white'
-                        : 'bg-slate-50 dark:bg-slate-950 text-slate-300 dark:text-slate-700 border-slate-100 dark:border-slate-800 cursor-not-allowed'
-                        }`}
-                    >
-                      {isProcessingThis ? '…' : `+${num}`}
-                    </button>
-                  ))}
+                <div className="text-right">
+                  <p className="text-[10px] uppercase text-slate-500 font-bold">Remains</p>
+                  <p className="text-4xl font-mono font-bold text-emerald-400">{f.plates_remaining}</p>
                 </div>
-
-                {isProcessingThis && (
-                  <div className="absolute inset-0 bg-white/40 dark:bg-slate-900/40 backdrop-blur-[1px] flex flex-col items-center justify-center animate-in fade-in duration-200">
-                    <div className="w-5 h-5 border-2 border-slate-200 dark:border-slate-800 border-t-emerald-500 rounded-full animate-spin mb-2"></div>
-                    <p className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 tracking-widest uppercase">Recording...</p>
-                  </div>
-                )}
               </div>
-            );
-          })}
 
-          {/* Exhausted families (plates_remaining = 0) */}
+              <button
+                onClick={() => openServeModal(f)}
+                disabled={isProcessing === f.id}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition-all active:scale-[0.98] disabled:opacity-50"
+              >
+                Serve Plates
+              </button>
+
+              {isProcessing === f.id && (
+                <div className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm flex items-center justify-center">
+                  <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                </div>
+              )}
+            </div>
+          ))}
+
           {exhaustedFamilies.length > 0 && (
-            <div className="mt-8">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">
-                Plates Exhausted ({exhaustedFamilies.length})
-              </p>
-              {exhaustedFamilies.map((family) => (
-                <div
-                  key={family.id}
-                  className="w-full rounded-xl border border-slate-800 bg-slate-900/50 p-4 mb-2 opacity-60"
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-bold text-slate-400">{family.surname}</p>
-                      <p className="text-[10px] text-slate-600">{family.head_name}</p>
-                    </div>
-                    <span className="text-xs font-bold text-red-500/70 uppercase">0 / {family.plates_entitled}</span>
+            <div className="pt-8 border-t border-slate-800/50">
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">Completed ({exhaustedFamilies.length})</h3>
+              {exhaustedFamilies.map(f => (
+                <div key={f.id} className="bg-slate-900/40 border border-slate-800/40 rounded-xl p-4 mb-2 flex justify-between opacity-60">
+                  <div>
+                    <p className="font-bold text-slate-400">{f.surname}</p>
+                    <p className="text-xs text-slate-600">{f.head_name}</p>
                   </div>
+                  <span className="text-red-500/50 font-mono font-bold">0</span>
                 </div>
               ))}
             </div>
           )}
-
-          {/* Empty states */}
-          {filteredFamilies.length === 0 && (
-            <div className="text-center py-20">
-              {search ? (
-                <>
-                  <p className="text-xl font-black text-slate-500">No Match Found</p>
-                  <p className="text-slate-700 font-bold mt-1">No checked-in family matches "{search}"</p>
-                </>
-              ) : (
-                <>
-                  <p className="text-xl font-black text-slate-500">No Families Checked In</p>
-                  <p className="text-slate-700 font-bold mt-1">Waiting for check-ins from Entry Gate.</p>
-                </>
-              )}
-            </div>
-          )}
-        </section>
+        </div>
       </div>
+
+      {/* SERVE MODAL */}
+      {selectedFamily && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-4 animate-in fade-in zoom-in-95 duration-200">
+          <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl">
+            <h2 className="text-xl font-bold mb-1">{selectedFamily.surname}</h2>
+            <p className="text-sm text-slate-500 mb-6">Max available: <span className="text-white font-bold">{selectedFamily.plates_remaining}</span></p>
+
+            <div className="mb-8">
+              <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block mb-3 text-center">
+                Quantity to Serve
+              </label>
+              <div className="flex items-center justify-center gap-4">
+                <button
+                  onClick={() => setCustomQty(Math.max(1, customQty - 1))}
+                  className="w-12 h-12 bg-slate-800 rounded-xl text-xl font-bold hover:bg-slate-700 transition"
+                >-</button>
+                <span className="text-4xl font-mono font-bold w-16 text-center">{customQty}</span>
+                <button
+                  onClick={() => setCustomQty(Math.min(selectedFamily.plates_remaining, customQty + 1))}
+                  className="w-12 h-12 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-xl font-bold hover:bg-emerald-500/30 transition"
+                >+</button>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <button
+                onClick={handleServe}
+                disabled={isProcessing === selectedFamily.id}
+                className="w-full bg-emerald-500 text-white font-bold py-3.5 rounded-xl hover:bg-emerald-400 transition-all shadow-lg shadow-emerald-500/20"
+              >
+                Confirm Serve ({customQty})
+              </button>
+              <button
+                onClick={() => setSelectedFamily(null)}
+                className="w-full bg-transparent text-slate-400 font-bold py-3 rounded-xl hover:bg-slate-800 transition-all"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

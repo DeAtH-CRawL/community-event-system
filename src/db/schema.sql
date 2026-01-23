@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS servings (
     event_name TEXT NOT NULL,
     family_id UUID NOT NULL REFERENCES families(id) ON DELETE CASCADE,
     plates_used INTEGER NOT NULL DEFAULT 0 CHECK (plates_used >= 0),
-    additional_guests INTEGER NOT NULL DEFAULT 0 CHECK (additional_guests >= 0),
+    guests INTEGER NOT NULL DEFAULT 0 CHECK (guests >= 0),
     checked_in_at TIMESTAMP WITH TIME ZONE,
     last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     UNIQUE(event_name, family_id)

@@ -12,9 +12,10 @@ export default function EntryGatePage() {
   const [selectedFamily, setSelectedFamily] = useState<Family | null>(null);
   const [stationId, setStationId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
-  const [guestCount, setGuestCount] = useState(0);
 
-  // Load stationId from localStorage
+  // Guest Input State
+  const [guests, setGuests] = useState(0);
+
   useEffect(() => {
     const saved = localStorage.getItem('station_id') || '';
     setStationId(saved);
@@ -25,7 +26,6 @@ export default function EntryGatePage() {
     localStorage.setItem('station_id', val);
   };
 
-  // Search with debounce
   useEffect(() => {
     let cancelled = false;
     setIsLoading(true);
@@ -64,18 +64,18 @@ export default function EntryGatePage() {
         role: 'volunteer',
         eventName: DEFAULT_EVENT,
         familyId: selectedFamily.id,
-        guestCount: guestCount,
+        guests: guests, // Pass guests
         stationId: stationId,
       });
 
       if (!result.success) {
         window.alert(result.message || 'Check-in failed.');
       } else {
-        const total = selectedFamily.plates_entitled + guestCount;
-        window.alert(`✓ ${selectedFamily.surname} checked in! ${total} plates entitled.`);
+        const total = selectedFamily.family_size + guests;
+        window.alert(`✓ Checked In! ${total} plates entitled (${selectedFamily.family_size} + ${guests} guests).`);
         setSearch('');
         setResults([]);
-        setGuestCount(0);
+        setGuests(0);
       }
       setSelectedFamily(null);
     } catch (err) {
@@ -111,7 +111,7 @@ export default function EntryGatePage() {
           </div>
         </header>
 
-        {/* Search Bar - FIXED: Clear placeholder text */}
+        {/* Search Bar */}
         <div className="mb-8">
           <div className="relative group">
             <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none">
@@ -123,7 +123,7 @@ export default function EntryGatePage() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by Family Name or Phone Number"
+              placeholder="Search by Name or Phone"
               className="w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 pl-14 pr-6 py-4 text-xl font-bold placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 transition-all"
               autoFocus
             />
@@ -145,7 +145,7 @@ export default function EntryGatePage() {
                 onClick={() => {
                   if (!isCheckedIn) {
                     setSelectedFamily(family);
-                    setGuestCount(0);
+                    setGuests(0); // Reset guests
                   }
                 }}
                 disabled={isCheckedIn}
@@ -156,23 +156,18 @@ export default function EntryGatePage() {
               >
                 <div className="flex justify-between items-center mb-1.5">
                   <div className="flex items-center gap-3">
-                    {/* FIXED: Show surname instead of family_name */}
                     <h2 className={`text-xl font-bold transition-colors ${isCheckedIn ? 'text-slate-400' : 'text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400'}`}>
                       {family.surname}
                     </h2>
                     {isCheckedIn && (
                       <span className="bg-amber-100 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide border border-amber-200 dark:border-amber-500/20">
-                        ALREADY CHECKED IN
+                        In
                       </span>
                     )}
                   </div>
-                  {/* FIXED: Show family_size and plates_remaining clearly */}
                   <div className="text-right">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                      Members: {family.family_size}
-                    </span>
-                    <span className={`text-sm font-bold ${family.plates_remaining > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                      {family.plates_remaining} plates left
+                      Size: {family.family_size}
                     </span>
                   </div>
                 </div>
@@ -188,99 +183,79 @@ export default function EntryGatePage() {
             );
           })}
 
-          {/* No Results Message */}
           {search.length >= 2 && results.length === 0 && !isLoading && (
             <div className="text-center py-12">
               <p className="text-xl font-bold text-slate-500">No family found</p>
-              <p className="text-slate-600 mt-2 max-w-xs mx-auto">
-                No match for "<span className="font-bold text-slate-400">{search}</span>" in the data source.
-              </p>
-              <p className="text-slate-700 text-sm mt-4">
-                Try searching by a different name or phone number.
-              </p>
             </div>
-          )}
-
-          {search.length < 2 && search.length > 0 && (
-            <p className="text-center text-slate-500 font-medium">
-              Type at least 2 characters to search
-            </p>
           )}
         </section>
       </div>
 
-      {/* Check-in Confirmation Modal */}
+      {/* Check-in Modal */}
       {selectedFamily && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl p-8 animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/90 backdrop-blur-md p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-md rounded-2xl bg-slate-950 border border-slate-800 shadow-2xl p-8">
             <div className="text-center space-y-6">
+
+              {/* Family Header */}
               <div>
-                <p className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-4">
+                <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest mb-4">
                   Confirm Check-In
                 </p>
-                <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">
+                <h2 className="text-3xl font-bold text-white mb-2">
                   {selectedFamily.surname}
                 </h2>
-                <p className="text-lg text-slate-500 dark:text-slate-400 font-medium mb-1">
-                  {selectedFamily.head_name}
-                </p>
-                <p className="text-xs text-slate-400 font-mono tracking-tight">
-                  {selectedFamily.phone}
-                </p>
-              </div>
-
-              {/* Key info display */}
-              <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4 border border-slate-200 dark:border-slate-700/50">
-                <div className="grid grid-cols-2 gap-4 text-center">
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Members</p>
-                    <p className="text-2xl font-bold text-slate-900 dark:text-white">{selectedFamily.family_size}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Plates Entitled</p>
-                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{selectedFamily.plates_entitled}</p>
-                  </div>
+                <div className="bg-slate-900 rounded-lg p-3 inline-block border border-slate-800">
+                  <span className="text-slate-400 text-xs font-bold uppercase tracking-wider mr-2">Registered Size</span>
+                  <span className="text-xl font-bold text-white">{selectedFamily.family_size}</span>
                 </div>
               </div>
 
-              {/* Guest Addition */}
-              <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4 border border-slate-200 dark:border-slate-700/50">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Additional Guests (Unlimited)</p>
-                <div className="flex items-center justify-center gap-4">
+              {/* Guest Input */}
+              <div className="bg-slate-900/50 rounded-xl p-6 border border-slate-800">
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-4">
+                  Additional Guests
+                </label>
+                <div className="flex items-center justify-center gap-6">
                   <button
-                    onClick={() => setGuestCount(Math.max(0, guestCount - 1))}
-                    className="w-12 h-12 flex items-center justify-center rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-bold text-xl hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors"
+                    onClick={() => setGuests(Math.max(0, guests - 1))}
+                    className="w-14 h-14 flex items-center justify-center rounded-xl bg-slate-800 text-slate-300 font-bold text-2xl hover:bg-slate-700 active:scale-95 transition-all"
                   >
                     -
                   </button>
-                  <span className="text-3xl font-black text-slate-900 dark:text-white w-12 text-center">
-                    {guestCount}
-                  </span>
+                  <div className="w-16 text-center">
+                    <span className="text-4xl font-black text-white">{guests}</span>
+                  </div>
                   <button
-                    onClick={() => setGuestCount(guestCount + 1)}
-                    className="w-12 h-12 flex items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold text-xl hover:bg-emerald-200 dark:hover:bg-emerald-500/30 transition-colors"
+                    onClick={() => setGuests(guests + 1)}
+                    className="w-14 h-14 flex items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 font-bold text-2xl hover:bg-emerald-500/30 active:scale-95 transition-all border border-emerald-500/30"
                   >
                     +
                   </button>
                 </div>
-                <p className="text-xs text-center text-slate-400 mt-2">
-                  Total Plates: <span className="text-emerald-500 font-bold">{selectedFamily.plates_entitled + guestCount}</span>
+              </div>
+
+              {/* Summary */}
+              <div className="text-center">
+                <p className="text-sm text-slate-400">
+                  Total Entitlement: <span className="text-emerald-400 font-bold text-lg">{selectedFamily.family_size + guests} Plates</span>
                 </p>
               </div>
 
+              {/* Actions */}
               <div className="flex flex-col gap-3">
                 <button
                   type="button"
                   onClick={handleCheckIn}
                   disabled={isSaving}
-                  className="w-full rounded-xl bg-emerald-500 text-white font-bold py-4 text-lg transition-all shadow-lg shadow-emerald-500/10 active:scale-95 disabled:opacity-50"
+                  className="w-full rounded-xl bg-emerald-500 text-white font-bold py-4 text-lg transition-all shadow-lg shadow-emerald-500/10 active:scale-95 disabled:opacity-50 hover:bg-emerald-400"
                 >
-                  {isSaving ? 'Checking in...' : `✓ Check In (${selectedFamily.plates_entitled + guestCount} plates)`}
+                  {isSaving ? 'Checking In...' : 'Confirm & Check In'}
                 </button>
                 <button
                   type="button"
                   onClick={() => setSelectedFamily(null)}
-                  className="w-full rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-bold py-4 text-sm transition-all"
+                  className="w-full rounded-xl bg-transparent border border-slate-800 text-slate-400 font-bold py-3 text-sm hover:bg-slate-900 transition-all"
                 >
                   Cancel
                 </button>
@@ -288,18 +263,14 @@ export default function EntryGatePage() {
             </div>
           </div>
         </div>
-      )
-      }
+      )}
 
       {/* Loading Overlay */}
-      {
-        isSaving && (
-          <div className="fixed inset-0 z-[100] bg-white/60 dark:bg-slate-950/60 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in duration-300">
-            <div className="w-12 h-12 border-4 border-slate-200 dark:border-slate-800 border-t-emerald-500 rounded-full animate-spin mb-4"></div>
-            <p className="text-slate-600 dark:text-slate-400 text-xs font-bold tracking-widest uppercase">Processing...</p>
-          </div>
-        )
-      }
-    </main >
+      {isSaving && (
+        <div className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm flex items-center justify-center">
+          <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+      )}
+    </main>
   );
 }
