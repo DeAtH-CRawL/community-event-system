@@ -65,17 +65,24 @@ async function logAudit(params: {
 // SEARCH FAMILIES
 // =============================================================================
 export async function searchFamilies(query: string, eventName: string): Promise<Family[]> {
-  const cleanQuery = query.trim();
+  const cleanQuery = query.trim().toLowerCase();
   if (cleanQuery.length < 2) return [];
 
   try {
-    const { data: families, error } = await supabase
+    // FIX: Read all families and filter in-memory to ensure matching logic with Admin
+    const { data: allFamilies, error } = await supabase
       .from('families')
-      .select('id, surname, head_name, phone, family_size, notes')
-      .or(`surname.ilike.%${cleanQuery}%,head_name.ilike.%${cleanQuery}%,phone.ilike.%${cleanQuery}%`)
-      .limit(30);
+      .select('id, surname, head_name, phone, family_size, notes');
 
-    if (error || !families || families.length === 0) return [];
+    if (error || !allFamilies) return [];
+
+    const families = allFamilies.filter(f =>
+      (f.surname?.toLowerCase() || '').includes(cleanQuery) ||
+      (f.head_name?.toLowerCase() || '').includes(cleanQuery) ||
+      (f.phone && String(f.phone).includes(cleanQuery))
+    ).slice(0, 30);
+
+    if (families.length === 0) return [];
 
     const familyIds = families.map(f => f.id);
     const { data: servings } = await supabase

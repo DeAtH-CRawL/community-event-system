@@ -49,6 +49,14 @@ export default function RootLayout({
             >
               FOOD COUNTER
             </Link>
+            {process.env.NODE_ENV === "development" && (
+              <Link
+                href="/admin"
+                className="flex-1 text-center text-xs font-bold tracking-wider rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 px-3 py-3 hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-95 transition-all focus:ring-2 focus:ring-slate-900 dark:focus:ring-white outline-none"
+              >
+                ADMIN DASHBOARD
+              </Link>
+            )}
           </nav>
         </header>
         {children}
