@@ -6,6 +6,7 @@ import { checkInFamily, searchFamilies, type Family } from '@/src/lib/actions';
 const DEFAULT_EVENT = "Community Dinner 2024";
 
 export default function EntryGatePage() {
+  const [eventName, setEventName] = useState(DEFAULT_EVENT);
   const [search, setSearch] = useState('');
   const [results, setResults] = useState<Family[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -17,6 +18,8 @@ export default function EntryGatePage() {
   const [guests, setGuests] = useState(0);
 
   useEffect(() => {
+    const savedEvent = localStorage.getItem('current_event_name');
+    if (savedEvent) setEventName(savedEvent);
     const saved = localStorage.getItem('station_id') || '';
     setStationId(saved);
   }, []);
@@ -37,7 +40,7 @@ export default function EntryGatePage() {
         return;
       }
       try {
-        const data = await searchFamilies(search, DEFAULT_EVENT);
+        const data = await searchFamilies(search, eventName);
         if (!cancelled) {
           setResults(Array.isArray(data) ? data : []);
         }
@@ -53,16 +56,20 @@ export default function EntryGatePage() {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [search]);
+  }, [search, eventName]);
 
   const handleCheckIn = async () => {
     if (!selectedFamily) return;
+
+    if (!window.confirm(`Check in ${selectedFamily.surname} family with ${guests} additional guests?`)) {
+      return;
+    }
 
     setIsSaving(true);
     try {
       const result = await checkInFamily({
         role: 'volunteer',
-        eventName: DEFAULT_EVENT,
+        eventName: eventName,
         familyId: selectedFamily.id,
         guests: guests, // Pass guests
         stationId: stationId,
@@ -95,9 +102,12 @@ export default function EntryGatePage() {
             <h1 className="text-3xl font-black tracking-tight text-emerald-400">
               Entry Gate
             </h1>
-            <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px] mt-1">
-              {DEFAULT_EVENT}
-            </p>
+            <div className="mt-1 flex items-center gap-2">
+              <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+              <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">
+                Event: {eventName}
+              </p>
+            </div>
           </div>
           <div className="flex flex-col items-end">
             <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1">STATION ID</label>

@@ -437,19 +437,33 @@ export async function getEventStats(eventName: string) {
   };
 }
 
+export async function getDistinctEventNames(): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('servings')
+    .select('event_name')
+    .neq('event_name', '');
+
+  if (error) {
+    console.error('Error fetching event names:', error);
+    return [];
+  }
+
+  const names = Array.from(new Set(data.map(s => s.event_name)));
+  return names.length > 0 ? names : ["Community Dinner 2024"];
+}
+
 export async function resetEvent(params: { eventName: string, stationId?: string }) {
   const { count } = await supabase.from('servings').select('*', { count: 'exact', head: true }).eq('event_name', params.eventName);
+
+  // Delete servings
   await supabase.from('servings').delete().eq('event_name', params.eventName);
 
-  await logAudit({
-    role: 'admin',
-    eventName: params.eventName,
-    familyId: null,
-    actionType: 'RESET',
-    details: `Reset event. Cleared ${count} records.`,
-    stationId: params.stationId
-  });
+  // Delete audit logs for this event
+  await supabase.from('audit_logs').delete().eq('event_name', params.eventName);
 
   revalidatePath('/admin');
-  return { success: true, message: 'Event reset' };
+  revalidatePath('/food');
+  revalidatePath('/entry');
+
+  return { success: true, message: 'Event reset and audit logs cleared' };
 }

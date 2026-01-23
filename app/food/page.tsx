@@ -13,6 +13,7 @@ const supabase = createClient(
 );
 
 export default function FoodCounterPage() {
+  const [eventName, setEventName] = useState(DEFAULT_EVENT);
   const [families, setFamilies] = useState<Family[]>([]);
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -25,13 +26,15 @@ export default function FoodCounterPage() {
   const [stationId, setStationId] = useState('');
 
   useEffect(() => {
+    const savedEvent = localStorage.getItem('current_event_name');
+    if (savedEvent) setEventName(savedEvent);
     setStationId(localStorage.getItem('station_id') || '');
   }, []);
 
   const loadFamilies = async () => {
     setIsLoading(true);
     try {
-      const data = await getCheckedInFamilies(DEFAULT_EVENT);
+      const data = await getCheckedInFamilies(eventName);
       setFamilies(Array.isArray(data) ? data : []);
       setLastSync(new Date());
     } catch (err) {
@@ -46,15 +49,24 @@ export default function FoodCounterPage() {
 
     // REALTIME SUBSCRIPTION
     const channel = supabase.channel('food-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'servings' }, () => {
-        loadFamilies(); // refresh on any change
-      })
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'servings',
+          filter: `event_name=eq.${eventName}`
+        },
+        () => {
+          loadFamilies(); // refresh on any change for THIS event
+        }
+      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [eventName]);
 
   const filteredFamilies = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -72,11 +84,15 @@ export default function FoodCounterPage() {
   const handleServe = async () => {
     if (!selectedFamily) return;
 
+    if (!window.confirm(`Serve ${customQty} plates to ${selectedFamily.surname}?`)) {
+      return;
+    }
+
     setIsProcessing(selectedFamily.id);
     try {
       const result = await servePlates({
         role: 'volunteer',
-        eventName: DEFAULT_EVENT,
+        eventName: eventName,
         familyId: selectedFamily.id,
         quantity: customQty,
         stationId: stationId
@@ -105,8 +121,16 @@ export default function FoodCounterPage() {
     <main className="min-h-screen bg-slate-950 text-white flex flex-col">
       <div className="w-full max-w-xl mx-auto px-4 py-6 flex-1 flex flex-col">
         {/* Header */}
-        <header className="mb-6 flex justify-between items-center">
-          <h1 className="text-2xl font-bold">Food Counter</h1>
+        <header className="mb-6 flex justify-between items-start">
+          <div>
+            <h1 className="text-2xl font-bold">Food Counter</h1>
+            <div className="mt-1 flex items-center gap-2">
+              <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+              <p className="text-slate-500 font-bold uppercase tracking-widest text-[9px]">
+                Event: {eventName}
+              </p>
+            </div>
+          </div>
           <div className="text-right">
             <p className="text-[10px] uppercase text-slate-500 font-bold tracking-widest">
               Last Sync: {lastSync.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
@@ -203,6 +227,15 @@ export default function FoodCounterPage() {
             </div>
 
             <div className="space-y-3">
+              <div className="bg-slate-800/50 p-3 rounded-lg border border-slate-700 mb-2">
+                <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Preview</p>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-slate-400">Remaining after serve:</span>
+                  <span className={`text-lg font-bold ${selectedFamily.plates_remaining - customQty === 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {selectedFamily.plates_remaining - customQty}
+                  </span>
+                </div>
+              </div>
               <button
                 onClick={handleServe}
                 disabled={isProcessing === selectedFamily.id}

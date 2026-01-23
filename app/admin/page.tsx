@@ -8,6 +8,7 @@ import {
     getAuditHistory,
     getEventStats,
     resetEvent,
+    getDistinctEventNames,
     type Family,
     type AuditLogEntry,
 } from '@/src/lib/actions';
@@ -21,6 +22,8 @@ const supabase = createClient(
 );
 
 export default function AdminDashboard() {
+    const [eventName, setEventName] = useState(DEFAULT_EVENT);
+    const [eventList, setEventList] = useState<string[]>([DEFAULT_EVENT]);
     const [families, setFamilies] = useState<Family[]>([]);
     const [search, setSearch] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -38,35 +41,110 @@ export default function AdminDashboard() {
     const [adjustmentValue, setAdjustmentValue] = useState(0);
     const [adjReason, setAdjReason] = useState('');
 
-    const loadData = async () => {
+    // Event Management
+    const [showNewEventModal, setShowNewEventModal] = useState(false);
+    const [newEventName, setNewEventName] = useState('');
+
+    const loadData = async (targetEvent?: string) => {
+        const eventToLoad = targetEvent || eventName;
         // Silent update if just refreshing data
         try {
-            const [familiesData, statsData] = await Promise.all([
-                getAllFamiliesWithStatus(DEFAULT_EVENT),
-                getEventStats(DEFAULT_EVENT),
+            const [familiesData, statsData, events] = await Promise.all([
+                getAllFamiliesWithStatus(eventToLoad),
+                getEventStats(eventToLoad),
+                getDistinctEventNames(),
             ]);
             setFamilies(Array.isArray(familiesData) ? familiesData : []);
             setStats(statsData);
+            if (events.length > 0) setEventList(events);
         } catch (err) {
             console.error(err);
         }
     };
 
     useEffect(() => {
+        const savedEvent = localStorage.getItem('current_event_name');
+        if (savedEvent) setEventName(savedEvent);
+
         setIsLoading(true);
-        loadData().finally(() => setIsLoading(false));
+        loadData(savedEvent || DEFAULT_EVENT).finally(() => setIsLoading(false));
 
         // Real-time Subscription
         const channel = supabase.channel('admin-live')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'servings' }, () => {
-                loadData();
-            })
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'servings',
+                    filter: `event_name=eq.${savedEvent || DEFAULT_EVENT}`
+                },
+                () => {
+                    loadData(savedEvent || DEFAULT_EVENT);
+                }
+            )
             .subscribe();
 
         return () => {
             supabase.removeChannel(channel);
         };
     }, []);
+
+    // Re-subscribe when eventName changes
+    useEffect(() => {
+        const channel = supabase.channel('admin-live-vent')
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'servings',
+                    filter: `event_name=eq.${eventName}`
+                },
+                () => {
+                    loadData(eventName);
+                }
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [eventName]);
+
+    const handleSwitchEvent = (name: string) => {
+        setEventName(name);
+        localStorage.setItem('current_event_name', name);
+        loadData(name);
+    };
+
+    const handleStartNewEvent = async () => {
+        if (!newEventName.trim()) return;
+        const name = newEventName.trim();
+        setEventName(name);
+        localStorage.setItem('current_event_name', name);
+        setShowNewEventModal(false);
+        setNewEventName('');
+        await loadData(name);
+    };
+
+    const handleReset = async () => {
+        if (!window.confirm(`CRITICAL: This will PERMANENTLY DELETE all check-ins and servings for "${eventName}". Are you sure?`)) {
+            return;
+        }
+
+        try {
+            const res = await resetEvent({ eventName: eventName });
+            if (res.success) {
+                window.alert("Event reset! All check-ins and plates cleared for this event.");
+                loadData();
+            } else {
+                alert(res.message);
+            }
+        } catch (err) {
+            alert("Failed to reset.");
+        }
+    };
 
     const handleSync = async () => {
         setIsSyncing(true);
@@ -92,7 +170,7 @@ export default function AdminDashboard() {
         try {
             const res = await adjustPlates({
                 role: 'admin',
-                eventName: DEFAULT_EVENT,
+                eventName: eventName,
                 familyId: selectedFamily.id,
                 adjustment: adjustmentValue,
                 reason: adjReason || `Admin Adjustment: ${adjustmentValue}`,
@@ -115,7 +193,7 @@ export default function AdminDashboard() {
         setHistory([]);
         setIsHistoryLoading(true);
         try {
-            const data = await getAuditHistory(DEFAULT_EVENT, f.id);
+            const data = await getAuditHistory(eventName, f.id);
             setHistory(data);
         } finally {
             setIsHistoryLoading(false);
@@ -136,18 +214,51 @@ export default function AdminDashboard() {
         <main className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-8">
             <div className="max-w-7xl mx-auto">
                 {/* Header */}
-                <header className="flex justify-between items-center mb-8">
-                    <div>
-                        <h1 className="text-3xl font-black text-white">Admin Dashboard</h1>
-                        <p className="text-xs text-slate-500 uppercase font-bold tracking-widest mt-1">
-                            {DEFAULT_EVENT}
-                        </p>
+                <header className="mb-0">
+                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
+                        <div>
+                            <h1 className="text-4xl font-black text-white tracking-tight">Admin Dashboard</h1>
+                            <div className="mt-2 flex items-center gap-2">
+                                <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                                <p className="text-sm text-slate-400 font-bold uppercase tracking-widest">
+                                    Current Event: <span className="text-emerald-400">{eventName}</span>
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-3">
+                            <div className="flex flex-col">
+                                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 ml-1">Switch Event</label>
+                                <select
+                                    value={eventName}
+                                    onChange={(e) => handleSwitchEvent(e.target.value)}
+                                    className="bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-sm font-bold text-slate-300 outline-none focus:border-emerald-500 min-w-[200px]"
+                                >
+                                    {eventList.map(e => <option key={e} value={e}>{e}</option>)}
+                                </select>
+                            </div>
+
+                            <div className="h-10 w-[1px] bg-slate-800 mx-2 hidden md:block"></div>
+
+                            <button
+                                onClick={() => setShowNewEventModal(true)}
+                                className="bg-red-600 hover:bg-red-500 text-white px-6 py-2.5 rounded-lg text-sm font-black uppercase tracking-wider transition-all shadow-lg shadow-red-900/20 active:scale-95 flex flex-col items-center leading-tight"
+                            >
+                                <span className="text-[10px] opacity-80">Reset / Start</span>
+                                <span>New Event</span>
+                            </button>
+
+                            <button onClick={handleSync} disabled={isSyncing} className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded-lg text-sm font-black uppercase tracking-wider transition-all disabled:opacity-50 h-[44px]">
+                                {isSyncing ? 'Syncing...' : 'Sync Data'}
+                            </button>
+                        </div>
                     </div>
-                    <div className="flex gap-2">
-                        <button onClick={handleSync} disabled={isSyncing} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors disabled:opacity-50">
-                            {isSyncing ? 'Syncing...' : 'Sync Data'}
-                        </button>
-                    </div>
+
+                    {syncResult && (
+                        <div className={`mb-6 p-4 rounded-xl border ${syncResult.success ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-red-500/10 border-red-500/20 text-red-400'} text-xs font-bold`}>
+                            {syncResult.message}
+                        </div>
+                    )}
                 </header>
 
                 {/* Stats */}
@@ -276,6 +387,46 @@ export default function AdminDashboard() {
                                 </div>
                             ))}
                             {!isHistoryLoading && history.length === 0 && <p className="text-center text-slate-500">No events.</p>}
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* New Event Modal */}
+            {showNewEventModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-200">
+                    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 w-full max-w-md shadow-2xl">
+                        <h3 className="text-2xl font-black text-white mb-2">New Event</h3>
+                        <p className="text-sm text-slate-400 mb-8 leading-relaxed">
+                            Starting a new event will switch the app to a clean state. You can also <button onClick={handleReset} className="text-red-400 font-bold underline">Reset "{eventName}"</button> to clear all its data.
+                        </p>
+
+                        <div className="space-y-6">
+                            <div>
+                                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Event Name</label>
+                                <input
+                                    type="text"
+                                    value={newEventName}
+                                    onChange={e => setNewEventName(e.target.value)}
+                                    placeholder="e.g. Wedding Dinner 2024"
+                                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-5 py-4 text-white font-bold text-lg outline-none focus:border-emerald-500 transition-all"
+                                />
+                            </div>
+
+                            <div className="flex flex-col gap-3">
+                                <button
+                                    onClick={handleStartNewEvent}
+                                    disabled={!newEventName.trim()}
+                                    className="w-full bg-emerald-500 hover:bg-emerald-400 text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-emerald-500/20 active:scale-95 disabled:opacity-50"
+                                >
+                                    Start This Event
+                                </button>
+                                <button
+                                    onClick={() => setShowNewEventModal(false)}
+                                    className="w-full text-slate-500 font-bold py-2 hover:text-white transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
