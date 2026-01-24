@@ -1,9 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { checkInFamily, searchFamilies, type Family } from '@/src/lib/actions';
-
-const DEFAULT_EVENT = "Community Dinner 2024";
+import { useEffect, useState, useCallback } from 'react';
+import { checkInFamily, searchFamilies, getLastSync, type Family } from '@/src/lib/actions';
+import { DEFAULT_EVENT, APP_CONFIG, UI_MESSAGES } from '@/src/lib/constants';
 
 export default function EntryGatePage() {
   const [eventName, setEventName] = useState(DEFAULT_EVENT);
@@ -13,20 +12,33 @@ export default function EntryGatePage() {
   const [selectedFamily, setSelectedFamily] = useState<Family | null>(null);
   const [stationId, setStationId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [lastSync, setLastSync] = useState<string | null>(null);
+
+  // Minimal Toast State
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   // Guest Input State
   const [guests, setGuests] = useState(0);
+
+  const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  }, []);
 
   useEffect(() => {
     const savedEvent = localStorage.getItem('current_event_name');
     if (savedEvent) setEventName(savedEvent);
     const saved = localStorage.getItem('station_id') || '';
     setStationId(saved);
+
+    // Initial last sync fetch
+    getLastSync(savedEvent || DEFAULT_EVENT).then(setLastSync);
   }, []);
 
   const updateStationId = (val: string) => {
-    setStationId(val);
-    localStorage.setItem('station_id', val);
+    const cleaned = val.toUpperCase().slice(0, APP_CONFIG.STATION_ID_MAX_LENGTH);
+    setStationId(cleaned);
+    localStorage.setItem('station_id', cleaned);
   };
 
   useEffect(() => {
@@ -34,7 +46,7 @@ export default function EntryGatePage() {
     setIsLoading(true);
 
     const handle = setTimeout(async () => {
-      if (search.length < 2) {
+      if (search.length < APP_CONFIG.SEARCH_MIN_CHARS) {
         setResults([]);
         setIsLoading(false);
         return;
@@ -46,24 +58,23 @@ export default function EntryGatePage() {
         }
       } catch (err) {
         console.error('searchFamilies failed', err);
-        if (!cancelled) setResults([]);
+        if (!cancelled) {
+          setResults([]);
+          showToast(UI_MESSAGES.SEARCH_ERROR, 'error');
+        }
       } finally {
         if (!cancelled) setIsLoading(false);
       }
-    }, 250);
+    }, APP_CONFIG.DEBOUNCE_DELAY_MS);
 
     return () => {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [search, eventName]);
+  }, [search, eventName, showToast]);
 
   const handleCheckIn = async () => {
     if (!selectedFamily) return;
-
-    if (!window.confirm(`Check in ${selectedFamily.surname} family with ${guests} additional guests?`)) {
-      return;
-    }
 
     setIsSaving(true);
     try {
@@ -71,61 +82,83 @@ export default function EntryGatePage() {
         role: 'volunteer',
         eventName: eventName,
         familyId: selectedFamily.id,
-        guests: guests, // Pass guests
+        guests: guests,
         stationId: stationId,
       });
 
       if (!result.success) {
-        window.alert(result.message || 'Check-in failed.');
+        showToast(result.error || UI_MESSAGES.CHECKIN_ERROR, 'error');
       } else {
         const total = selectedFamily.family_size + guests;
-        window.alert(`✓ Checked In! ${total} plates entitled (${selectedFamily.family_size} + ${guests} guests).`);
+        showToast(`✓ Checked In! ${total} plates entitled.`, 'success');
         setSearch('');
         setResults([]);
         setGuests(0);
+        setSelectedFamily(null);
       }
-      setSelectedFamily(null);
     } catch (err) {
       console.error(err);
-      window.alert('Check-in failed. Please try again.');
+      showToast(UI_MESSAGES.CHECKIN_ERROR, 'error');
     } finally {
       setIsSaving(false);
     }
   };
 
+  const closeModal = () => {
+    if (isSaving) return;
+    setSelectedFamily(null);
+    setGuests(0);
+  };
+
   return (
-    <main className="min-h-screen bg-slate-950 text-white flex flex-col">
-      <div className="w-full max-w-xl mx-auto px-4 py-6 flex-1 flex flex-col">
+    <main className="min-h-screen bg-slate-950 text-white flex flex-col relative overflow-x-hidden pt-0 sm:pt-0">
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[200] px-6 py-4 rounded-2xl shadow-2xl font-black text-xs uppercase tracking-widest animate-in fade-in slide-in-from-top-4 duration-300 border border-white/10 backdrop-blur-md ${toast.type === 'success' ? 'bg-emerald-600/90 text-white' : 'bg-red-600/90 text-white'
+          }`}>
+          {toast.message}
+        </div>
+      )}
+
+      <div className="w-full max-w-xl mx-auto px-4 py-8 flex-1 flex flex-col">
         {/* Header */}
-        <header className="mb-6 flex justify-between items-start">
+        <header className="mb-10 flex justify-between items-start">
           <div>
-            <h1 className="text-3xl font-black tracking-tight text-emerald-400">
+            <h1 className="text-4xl font-black tracking-tighter text-emerald-400">
               Entry Gate
             </h1>
-            <div className="mt-1 flex items-center gap-2">
-              <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
-              <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">
-                Event: {eventName}
-              </p>
+            <div className="mt-2 flex flex-col gap-1.5">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                <p className="text-slate-400 font-black uppercase tracking-widest text-[11px]">
+                  Event: {eventName}
+                </p>
+              </div>
+              {lastSync && (
+                <p className="text-slate-500 font-bold text-[10px] uppercase tracking-widest bg-slate-900 px-2 py-0.5 rounded border border-slate-800 w-fit">
+                  Synced: {new Date(lastSync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </p>
+              )}
             </div>
           </div>
           <div className="flex flex-col items-end">
-            <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1">STATION ID</label>
+            <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest mb-2">STATION</label>
             <input
               type="text"
               value={stationId}
               onChange={(e) => updateStationId(e.target.value)}
-              placeholder="e.g. Gate 1"
-              className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1 text-[10px] font-black uppercase text-emerald-400 focus:border-emerald-500 outline-none w-24 text-center"
+              placeholder="GATE-1"
+              className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm font-black uppercase text-emerald-400 focus:border-emerald-500 outline-none w-32 text-center shadow-lg shadow-black/50"
+              maxLength={APP_CONFIG.STATION_ID_MAX_LENGTH}
             />
           </div>
         </header>
 
         {/* Search Bar */}
-        <div className="mb-8">
+        <div className="mb-12">
           <div className="relative group">
-            <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none">
-              <svg className="w-5 h-5 text-slate-400 group-focus-within:text-emerald-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="absolute inset-y-0 left-6 flex items-center pointer-events-none">
+              <svg className="w-7 h-7 text-slate-500 group-focus-within:text-emerald-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
             </div>
@@ -133,17 +166,21 @@ export default function EntryGatePage() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by Name or Phone"
-              className="w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 pl-14 pr-6 py-4 text-xl font-bold placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 transition-all"
+              placeholder="Family Name / Phone"
+              className="w-full rounded-[1.5rem] border border-slate-800 bg-slate-900/60 pl-16 pr-8 py-6 text-2xl font-black placeholder:text-slate-600 focus:outline-none focus:ring-8 focus:ring-emerald-500/5 focus:border-emerald-500 transition-all shadow-2xl"
               autoFocus
+              aria-label="Search families by surname or phone number"
             />
           </div>
         </div>
 
         {/* Results */}
-        <section className="flex-1 overflow-y-auto pb-6 space-y-4">
-          {isLoading && search.length > 0 && (
-            <p className="text-center font-bold text-slate-500 animate-pulse">Searching…</p>
+        <section className="flex-1 overflow-y-auto pb-8 space-y-5">
+          {isLoading && search.length >= APP_CONFIG.SEARCH_MIN_CHARS && (
+            <div className="flex flex-col items-center justify-center py-12 gap-4">
+              <div className="w-8 h-8 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin"></div>
+              <p className="font-black text-slate-600 uppercase tracking-widest text-xs">Scanning Database…</p>
+            </div>
           )}
 
           {results.map((family) => {
@@ -155,47 +192,55 @@ export default function EntryGatePage() {
                 onClick={() => {
                   if (!isCheckedIn) {
                     setSelectedFamily(family);
-                    setGuests(0); // Reset guests
+                    setGuests(0);
+                  } else {
+                    showToast(UI_MESSAGES.ALREADY_CHECKED_IN, 'error');
                   }
                 }}
-                disabled={isCheckedIn}
-                className={`w-full text-left rounded-2xl border border-slate-200 dark:border-slate-800 p-6 transition-all active:scale-[0.98] group ${isCheckedIn
-                  ? 'bg-slate-50 dark:bg-slate-900/50 opacity-60 cursor-not-allowed grayscale'
-                  : 'bg-white dark:bg-slate-900 hover:border-emerald-500 dark:hover:border-emerald-500/50'
+                className={`w-full text-left rounded-[1.5rem] border-2 p-7 transition-all active:scale-[0.97] group relative overflow-hidden shadow-xl ${isCheckedIn
+                  ? 'bg-slate-900/30 border-transparent opacity-40 grayscale cursor-default'
+                  : 'bg-slate-900/80 border-slate-800/80 hover:border-emerald-500/40 hover:bg-slate-800'
                   }`}
+                aria-label={`Check in ${family.surname} family`}
               >
-                <div className="flex justify-between items-center mb-1.5">
-                  <div className="flex items-center gap-3">
-                    <h2 className={`text-xl font-bold transition-colors ${isCheckedIn ? 'text-slate-400' : 'text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400'}`}>
+                <div className="flex justify-between items-center mb-3">
+                  <div className="flex items-center gap-4">
+                    <h2 className={`text-3xl font-black transition-colors ${isCheckedIn ? 'text-slate-500' : 'text-white group-hover:text-emerald-400 tracking-tight'}`}>
                       {family.surname}
                     </h2>
                     {isCheckedIn && (
-                      <span className="bg-amber-100 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide border border-amber-200 dark:border-amber-500/20">
-                        In
+                      <span className="bg-amber-500/10 text-amber-500 px-3 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-[0.1em] border border-amber-500/20">
+                        IN SYSTEM
                       </span>
                     )}
                   </div>
                   <div className="text-right">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                      Size: {family.family_size}
+                    <span className="text-xs font-black text-slate-500 uppercase tracking-widest block opacity-70">
+                      FAM SIZE: {family.family_size}
                     </span>
                   </div>
                 </div>
                 <div className="flex justify-between items-baseline">
-                  <p className="text-base text-slate-500 dark:text-slate-400 font-medium">
+                  <p className="text-xl text-slate-400 font-bold tracking-tight">
                     {family.head_name}
                   </p>
-                  <p className="text-xs text-slate-400 font-mono">
-                    {family.phone}
+                  <p className="text-base text-slate-500 font-black tracking-widest font-mono">
+                    {family.phone?.slice(-4) ? `****${family.phone.slice(-4)}` : 'N/A'}
                   </p>
                 </div>
               </button>
             );
           })}
 
-          {search.length >= 2 && results.length === 0 && !isLoading && (
-            <div className="text-center py-12">
-              <p className="text-xl font-bold text-slate-500">No family found</p>
+          {search.length >= APP_CONFIG.SEARCH_MIN_CHARS && results.length === 0 && !isLoading && (
+            <div className="text-center py-20 bg-slate-900/20 rounded-[2.5rem] border-4 border-dashed border-slate-800/50">
+              <div className="w-16 h-16 bg-slate-900 rounded-full flex items-center justify-center mx-auto mb-6 border border-slate-800">
+                <svg className="w-8 h-8 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+              <p className="text-2xl font-black text-slate-500 mb-2">{UI_MESSAGES.NOT_FOUND}</p>
+              <p className="text-sm text-slate-600 font-bold px-8 leading-relaxed max-w-xs mx-auto">Try searching for just the SURNAME or the LAST 4 DIGITS of the phone number.</p>
             </div>
           )}
         </section>
@@ -203,42 +248,49 @@ export default function EntryGatePage() {
 
       {/* Check-in Modal */}
       {selectedFamily && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/90 backdrop-blur-md p-4 animate-in fade-in duration-200">
-          <div className="w-full max-w-md rounded-2xl bg-slate-950 border border-slate-800 shadow-2xl p-8">
-            <div className="text-center space-y-6">
-
+        <div
+          className="fixed inset-0 z-[150] flex items-end sm:items-center justify-center bg-slate-950/95 backdrop-blur-xl p-0 sm:p-4 animate-in fade-in duration-300"
+          onClick={closeModal}
+        >
+          <div
+            className="w-full max-w-lg rounded-t-[3rem] sm:rounded-[3rem] bg-slate-900 border-t sm:border border-slate-800 shadow-[0_-20px_50px_rgba(0,0,0,0.5)] p-10 relative overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-center space-y-10">
               {/* Family Header */}
               <div>
-                <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest mb-4">
-                  Confirm Check-In
+                <p className="text-xs font-black text-emerald-500 uppercase tracking-[0.3em] mb-6">
+                  Verify Check-In
                 </p>
-                <h2 className="text-3xl font-bold text-white mb-2">
+                <h2 className="text-5xl font-black text-white mb-4 tracking-tighter">
                   {selectedFamily.surname}
                 </h2>
-                <div className="bg-slate-900 rounded-lg p-3 inline-block border border-slate-800">
-                  <span className="text-slate-400 text-xs font-bold uppercase tracking-wider mr-2">Registered Size</span>
-                  <span className="text-xl font-bold text-white">{selectedFamily.family_size}</span>
+                <div className="bg-slate-950 rounded-2xl p-5 inline-flex items-center border border-slate-800 shadow-inner">
+                  <span className="text-slate-500 text-xs font-black uppercase tracking-widest mr-4">Family Base Size</span>
+                  <span className="text-3xl font-black text-emerald-400">{selectedFamily.family_size}</span>
                 </div>
               </div>
 
               {/* Guest Input */}
-              <div className="bg-slate-900/50 rounded-xl p-6 border border-slate-800">
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-4">
-                  Additional Guests
+              <div className="bg-slate-950/70 rounded-[2.5rem] p-10 border border-slate-800/80 shadow-2xl relative group">
+                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-8">
+                  Extra Guests (Non-Registered)
                 </label>
-                <div className="flex items-center justify-center gap-6">
+                <div className="flex items-center justify-center gap-10">
                   <button
                     onClick={() => setGuests(Math.max(0, guests - 1))}
-                    className="w-14 h-14 flex items-center justify-center rounded-xl bg-slate-800 text-slate-300 font-bold text-2xl hover:bg-slate-700 active:scale-95 transition-all"
+                    className="w-20 h-20 flex items-center justify-center rounded-[1.5rem] bg-slate-800 text-slate-300 font-black text-4xl hover:bg-slate-700 active:scale-90 transition-all border border-slate-700 shadow-xl"
+                    aria-label="Decrease guest count"
                   >
-                    -
+                    −
                   </button>
-                  <div className="w-16 text-center">
-                    <span className="text-4xl font-black text-white">{guests}</span>
+                  <div className="w-24 text-center">
+                    <span className="text-7xl font-black text-white lining-nums transition-all group-active:scale-110">{guests}</span>
                   </div>
                   <button
                     onClick={() => setGuests(guests + 1)}
-                    className="w-14 h-14 flex items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 font-bold text-2xl hover:bg-emerald-500/30 active:scale-95 transition-all border border-emerald-500/30"
+                    className="w-20 h-20 flex items-center justify-center rounded-[1.5rem] bg-emerald-500/10 text-emerald-400 font-black text-4xl hover:bg-emerald-500/20 active:scale-90 transition-all border border-emerald-500/20 shadow-2xl shadow-emerald-500/5"
+                    aria-label="Increase guest count"
                   >
                     +
                   </button>
@@ -246,39 +298,41 @@ export default function EntryGatePage() {
               </div>
 
               {/* Summary */}
-              <div className="text-center">
-                <p className="text-sm text-slate-400">
-                  Total Entitlement: <span className="text-emerald-400 font-bold text-lg">{selectedFamily.family_size + guests} Plates</span>
+              <div className="text-center pb-4">
+                <p className="text-slate-500 font-black uppercase tracking-widest text-sm mb-1">Total Entitlement</p>
+                <p className="text-emerald-400 font-black text-4xl tracking-tight">
+                  {selectedFamily.family_size + guests} PLATES
                 </p>
               </div>
 
               {/* Actions */}
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-5 pt-2">
                 <button
                   type="button"
                   onClick={handleCheckIn}
                   disabled={isSaving}
-                  className="w-full rounded-xl bg-emerald-500 text-white font-bold py-4 text-lg transition-all shadow-lg shadow-emerald-500/10 active:scale-95 disabled:opacity-50 hover:bg-emerald-400"
+                  className="w-full rounded-[1.5rem] bg-emerald-500 text-white font-black py-6 text-2xl transition-all shadow-2xl shadow-emerald-500/20 active:scale-[0.98] disabled:opacity-50 hover:bg-emerald-400 flex items-center justify-center gap-4 border-b-4 border-emerald-700 active:border-b-0"
                 >
-                  {isSaving ? 'Checking In...' : 'Confirm & Check In'}
+                  {isSaving ? (
+                    <>
+                      <div className="w-6 h-6 border-4 border-white/20 border-t-white rounded-full animate-spin"></div>
+                      <span className="tracking-tighter">FINALIZING…</span>
+                    </>
+                  ) : (
+                    'AUTHORIZE ENTRY'
+                  )}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSelectedFamily(null)}
-                  className="w-full rounded-xl bg-transparent border border-slate-800 text-slate-400 font-bold py-3 text-sm hover:bg-slate-900 transition-all"
+                  onClick={closeModal}
+                  disabled={isSaving}
+                  className="w-full rounded-[1.5rem] bg-transparent border-2 border-slate-800 text-slate-500 font-black py-4 text-sm hover:bg-slate-800 hover:text-slate-300 transition-all tracking-[0.2em]"
                 >
-                  Cancel
+                  DISMISS
                 </button>
               </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Loading Overlay */}
-      {isSaving && (
-        <div className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm flex items-center justify-center">
-          <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
         </div>
       )}
     </main>

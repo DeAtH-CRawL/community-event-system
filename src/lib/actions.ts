@@ -25,6 +25,13 @@ export type Family = {
   checked_in_at?: string | null;
 };
 
+export type ActionResult<T = any> = {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string; // For backward compatibility if needed, but error is preferred
+};
+
 export type AuditLogEntry = {
   id: string;
   actor_role: string;
@@ -50,16 +57,20 @@ async function logAudit(params: {
   before?: any;
   after?: any;
 }) {
-  await supabase.from('audit_logs').insert({
-    actor_role: params.role,
-    event_name: params.eventName,
-    family_id: params.familyId,
-    action_type: params.actionType,
-    details: params.details,
-    station_id: params.stationId || null,
-    before_value: params.before,
-    after_value: params.after
-  });
+  try {
+    await supabase.from('audit_logs').insert({
+      actor_role: params.role,
+      event_name: params.eventName,
+      family_id: params.familyId,
+      action_type: params.actionType,
+      details: params.details,
+      station_id: params.stationId || null,
+      before_value: params.before,
+      after_value: params.after
+    });
+  } catch (err) {
+    console.error('[AuditLog] Failed to log:', err);
+  }
 }
 
 // =============================================================================
@@ -131,59 +142,70 @@ export async function checkInFamily(params: {
   role: UserRole;
   eventName: string;
   familyId: string;
-  guests: number; // New param
+  guests: number;
   stationId?: string;
-}) {
+}): Promise<ActionResult> {
   const { familyId, eventName, guests } = params;
 
-  const { data: family } = await supabase
-    .from('families')
-    .select('*')
-    .eq('id', familyId)
-    .single();
+  try {
+    const { data: family, error: fetchError } = await supabase
+      .from('families')
+      .select('id, surname')
+      .eq('id', familyId)
+      .single();
 
-  if (!family) return { success: false, message: 'Family not found' };
+    if (fetchError || !family) {
+      return { success: false, error: 'Family not found.' };
+    }
 
-  const { data: existing } = await supabase
-    .from('servings')
-    .select('id, checked_in_at')
-    .eq('event_name', eventName)
-    .eq('family_id', familyId)
-    .maybeSingle();
+    const { data: existing, error: existingError } = await supabase
+      .from('servings')
+      .select('checked_in_at')
+      .eq('event_name', eventName)
+      .eq('family_id', familyId)
+      .maybeSingle();
 
-  if (existing?.checked_in_at) {
-    return { success: false, message: 'Already checked in' };
+    if (existing?.checked_in_at) {
+      return { success: false, error: 'Family already checked in.' };
+    }
+
+    const now = new Date().toISOString();
+
+    const { error: upsertError } = await supabase
+      .from('servings')
+      .upsert(
+        {
+          event_name: eventName,
+          family_id: familyId,
+          checked_in_at: now,
+          guests: guests,
+          plates_used: existing ? undefined : 0,
+        },
+        { onConflict: 'event_name, family_id' }
+      );
+
+    if (upsertError) {
+      console.error('[CheckIn] Upsert Error:', upsertError);
+      return { success: false, error: 'Database update failed.' };
+    }
+
+    await logAudit({
+      role: params.role,
+      eventName,
+      familyId,
+      actionType: 'CHECK_IN',
+      details: `Checked in ${family.surname} family with ${guests} guests`,
+      stationId: params.stationId
+    });
+
+    revalidatePath('/entry');
+    revalidatePath('/food');
+    revalidatePath('/admin');
+    return { success: true };
+  } catch (err) {
+    console.error('[CheckIn] Fatal Error:', err);
+    return { success: false, error: 'An unexpected error occurred.' };
   }
-
-  const now = new Date().toISOString();
-
-  // Upsert with guests
-  await supabase
-    .from('servings')
-    .upsert(
-      {
-        event_name: eventName,
-        family_id: familyId,
-        checked_in_at: now,
-        guests: guests,
-        plates_used: existing ? undefined : 0,
-      },
-      { onConflict: 'event_name, family_id' }
-    );
-
-  await logAudit({
-    role: params.role,
-    eventName,
-    familyId,
-    actionType: 'CHECK_IN',
-    details: `Checked in ${family.surname} family with ${guests} guests`,
-    stationId: params.stationId
-  });
-
-  revalidatePath('/entry');
-  revalidatePath('/food');
-  revalidatePath('/admin');
-  return { success: true };
 }
 
 // =============================================================================
@@ -195,48 +217,61 @@ export async function servePlates(params: {
   familyId: string;
   quantity: number;
   stationId?: string;
-}) {
-  const { familyId, quantity } = params;
-  if (quantity < 1) return { success: false, message: 'Invalid quantity' };
+}): Promise<ActionResult> {
+  const { familyId, quantity, eventName } = params;
+  if (quantity < 1) return { success: false, error: 'Invalid quantity.' };
 
-  const { data: family } = await supabase.from('families').select('family_size').eq('id', familyId).single();
-  const { data: serving } = await supabase.from('servings').select('plates_used, guests, id').eq('event_name', params.eventName).eq('family_id', familyId).single();
+  try {
+    const [familyResult, servingResult] = await Promise.all([
+      supabase.from('families').select('family_size').eq('id', familyId).single(),
+      supabase.from('servings').select('plates_used, guests, id').eq('event_name', eventName).eq('family_id', familyId).single()
+    ]);
 
-  if (!family || !serving) return { success: false, message: 'Not checked in' };
+    if (familyResult.error || servingResult.error || !familyResult.data || !servingResult.data) {
+      return { success: false, error: 'Check-in record not found.' };
+    }
 
-  // Logic Change: Limit is family_size + guests
-  const limit = family.family_size + (serving.guests || 0);
-  const used = serving.plates_used;
+    const family = familyResult.data;
+    const serving = servingResult.data;
 
-  if (used + quantity > limit) {
-    return { success: false, message: `Exceeds limit. Remaining: ${limit - used}` };
+    const limit = (family.family_size || 0) + (serving.guests || 0);
+    const used = serving.plates_used || 0;
+
+    if (used + quantity > limit) {
+      return { success: false, error: `Exceeds limit. Remaining: ${limit - used}` };
+    }
+
+    const { error } = await supabase
+      .from('servings')
+      .update({
+        plates_used: used + quantity,
+        last_updated: new Date().toISOString()
+      })
+      .eq('id', serving.id)
+      .eq('plates_used', used); // Optimistic lock
+
+    if (error) {
+      return { success: false, error: 'Plate update failed. Someone else may have updated this record.' };
+    }
+
+    await logAudit({
+      role: params.role,
+      eventName: params.eventName,
+      familyId,
+      actionType: 'SERVE',
+      details: `Served ${quantity} plates`,
+      stationId: params.stationId,
+      before: { plates_used: used },
+      after: { plates_used: used + quantity }
+    });
+
+    revalidatePath('/food');
+    revalidatePath('/admin');
+    return { success: true };
+  } catch (err) {
+    console.error('[Serve] Fatal Error:', err);
+    return { success: false, error: 'An unexpected error occurred during serving.' };
   }
-
-  const { error } = await supabase
-    .from('servings')
-    .update({
-      plates_used: used + quantity,
-      last_updated: new Date().toISOString()
-    })
-    .eq('id', serving.id)
-    .eq('plates_used', used); // Optimistic lock
-
-  if (error) return { success: false, message: 'Concurrency error or limit exceeded. Try again.' };
-
-  await logAudit({
-    role: params.role,
-    eventName: params.eventName,
-    familyId,
-    actionType: 'SERVE',
-    details: `Served ${quantity} plates`,
-    stationId: params.stationId,
-    before: { plates_used: used },
-    after: { plates_used: used + quantity }
-  });
-
-  revalidatePath('/food');
-  revalidatePath('/admin');
-  return { success: true };
 }
 
 // =============================================================================
@@ -249,40 +284,51 @@ export async function adjustPlates(params: {
   adjustment: number;
   reason: string;
   stationId?: string;
-}) {
+}): Promise<ActionResult> {
   const { familyId, adjustment, eventName } = params;
 
-  const { data: serving } = await supabase
-    .from('servings')
-    .select('id, plates_used')
-    .eq('event_name', eventName)
-    .eq('family_id', familyId)
-    .single();
+  try {
+    const { data: serving, error: fetchError } = await supabase
+      .from('servings')
+      .select('id, plates_used')
+      .eq('event_name', eventName)
+      .eq('family_id', familyId)
+      .single();
 
-  if (!serving) return { success: false, message: 'Record not found' };
+    if (fetchError || !serving) {
+      return { success: false, error: 'Record not found.' };
+    }
 
-  const oldUsed = serving.plates_used;
-  const newUsed = Math.max(0, oldUsed + adjustment);
+    const oldUsed = serving.plates_used || 0;
+    const newUsed = Math.max(0, oldUsed + adjustment);
 
-  await supabase
-    .from('servings')
-    .update({ plates_used: newUsed, last_updated: new Date().toISOString() })
-    .eq('id', serving.id);
+    const { error: updateError } = await supabase
+      .from('servings')
+      .update({ plates_used: newUsed, last_updated: new Date().toISOString() })
+      .eq('id', serving.id);
 
-  await logAudit({
-    role: params.role,
-    eventName,
-    familyId,
-    actionType: 'ADJUST',
-    details: params.reason,
-    stationId: params.stationId,
-    before: { plates_used: oldUsed },
-    after: { plates_used: newUsed }
-  });
+    if (updateError) {
+      return { success: false, error: 'Failed to update record.' };
+    }
 
-  revalidatePath('/food');
-  revalidatePath('/admin');
-  return { success: true };
+    await logAudit({
+      role: params.role,
+      eventName,
+      familyId,
+      actionType: 'ADJUST',
+      details: params.reason,
+      stationId: params.stationId,
+      before: { plates_used: oldUsed },
+      after: { plates_used: newUsed }
+    });
+
+    revalidatePath('/food');
+    revalidatePath('/admin');
+    return { success: true };
+  } catch (err) {
+    console.error('[Adjust] Fatal Error:', err);
+    return { success: false, error: 'An unexpected error occurred.' };
+  }
 }
 
 export async function updateGuestCount(params: {
@@ -291,40 +337,51 @@ export async function updateGuestCount(params: {
   familyId: string;
   guests: number;
   stationId?: string;
-}) {
+}): Promise<ActionResult> {
   const { familyId, guests, eventName } = params;
 
-  const { data: serving } = await supabase
-    .from('servings')
-    .select('id, guests')
-    .eq('event_name', eventName)
-    .eq('family_id', familyId)
-    .single();
+  try {
+    const { data: serving, error: fetchError } = await supabase
+      .from('servings')
+      .select('id, guests')
+      .eq('event_name', eventName)
+      .eq('family_id', familyId)
+      .single();
 
-  if (!serving) return { success: false, message: 'Record not found' };
+    if (fetchError || !serving) {
+      return { success: false, error: 'Record not found.' };
+    }
 
-  const oldGuests = serving.guests;
+    const oldGuests = serving.guests || 0;
 
-  await supabase
-    .from('servings')
-    .update({ guests: guests, last_updated: new Date().toISOString() })
-    .eq('id', serving.id);
+    const { error: updateError } = await supabase
+      .from('servings')
+      .update({ guests: guests, last_updated: new Date().toISOString() })
+      .eq('id', serving.id);
 
-  await logAudit({
-    role: params.role,
-    eventName,
-    familyId,
-    actionType: 'UPDATE_GUESTS',
-    details: `Updated guests from ${oldGuests} to ${guests}`,
-    stationId: params.stationId,
-    before: { guests: oldGuests },
-    after: { guests: guests }
-  });
+    if (updateError) {
+      return { success: false, error: 'Failed to update guests.' };
+    }
 
-  revalidatePath('/entry');
-  revalidatePath('/food');
-  revalidatePath('/admin');
-  return { success: true };
+    await logAudit({
+      role: params.role,
+      eventName,
+      familyId,
+      actionType: 'UPDATE_GUESTS',
+      details: `Updated guests from ${oldGuests} to ${guests}`,
+      stationId: params.stationId,
+      before: { guests: oldGuests },
+      after: { guests: guests }
+    });
+
+    revalidatePath('/entry');
+    revalidatePath('/food');
+    revalidatePath('/admin');
+    return { success: true };
+  } catch (err) {
+    console.error('[UpdateGuests] Fatal Error:', err);
+    return { success: false, error: 'An unexpected error occurred.' };
+  }
 }
 
 // =============================================================================
@@ -450,6 +507,24 @@ export async function getDistinctEventNames(): Promise<string[]> {
 
   const names = Array.from(new Set(data.map(s => s.event_name)));
   return names.length > 0 ? names : ["Community Dinner 2024"];
+}
+
+
+export async function getLastSync(eventName: string): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from('audit_logs')
+      .select('created_at')
+      .eq('action_type', 'SYNC')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return data.created_at;
+  } catch (err) {
+    return null;
+  }
 }
 
 export async function resetEvent(params: { eventName: string, stationId?: string }) {

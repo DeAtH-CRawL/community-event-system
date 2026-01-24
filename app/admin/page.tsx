@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import {
     getAllFamiliesWithStatus,
@@ -12,8 +12,8 @@ import {
     type Family,
     type AuditLogEntry,
 } from '@/src/lib/actions';
-
-const DEFAULT_EVENT = "Community Dinner 2024";
+import { DEFAULT_EVENT } from '@/src/lib/constants';
+import { Toast } from '@/src/components/Toast';
 
 // Client-side Supabase for Realtime
 const supabase = createClient(
@@ -45,9 +45,15 @@ export default function AdminDashboard() {
     const [showNewEventModal, setShowNewEventModal] = useState(false);
     const [newEventName, setNewEventName] = useState('');
 
-    const loadData = async (targetEvent?: string) => {
+    // Toast state
+    const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+    const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
+        setToast({ message, type });
+    }, []);
+
+    const loadData = useCallback(async (targetEvent?: string) => {
         const eventToLoad = targetEvent || eventName;
-        // Silent update if just refreshing data
         try {
             const [familiesData, statsData, events] = await Promise.all([
                 getAllFamiliesWithStatus(eventToLoad),
@@ -60,7 +66,7 @@ export default function AdminDashboard() {
         } catch (err) {
             console.error(err);
         }
-    };
+    }, [eventName]);
 
     useEffect(() => {
         const savedEvent = localStorage.getItem('current_event_name');
@@ -68,31 +74,11 @@ export default function AdminDashboard() {
 
         setIsLoading(true);
         loadData(savedEvent || DEFAULT_EVENT).finally(() => setIsLoading(false));
+    }, [loadData]);
 
-        // Real-time Subscription
-        const channel = supabase.channel('admin-live')
-            .on(
-                'postgres_changes',
-                {
-                    event: '*',
-                    schema: 'public',
-                    table: 'servings',
-                    filter: `event_name=eq.${savedEvent || DEFAULT_EVENT}`
-                },
-                () => {
-                    loadData(savedEvent || DEFAULT_EVENT);
-                }
-            )
-            .subscribe();
-
-        return () => {
-            supabase.removeChannel(channel);
-        };
-    }, []);
-
-    // Re-subscribe when eventName changes
+    // Real-time Subscription
     useEffect(() => {
-        const channel = supabase.channel('admin-live-vent')
+        const channel = supabase.channel('admin-live')
             .on(
                 'postgres_changes',
                 {
@@ -110,7 +96,7 @@ export default function AdminDashboard() {
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [eventName]);
+    }, [eventName, loadData]);
 
     const handleSwitchEvent = (name: string) => {
         setEventName(name);
@@ -126,23 +112,24 @@ export default function AdminDashboard() {
         setShowNewEventModal(false);
         setNewEventName('');
         await loadData(name);
+        showToast(`Switched to new event: ${name}`);
     };
 
     const handleReset = async () => {
-        if (!window.confirm(`CRITICAL: This will PERMANENTLY DELETE all check-ins and servings for "${eventName}". Are you sure?`)) {
+        if (!window.confirm(`CRITICAL: This will PERMANENTLY DELETE all entries for "${eventName}". Continue?`)) {
             return;
         }
 
         try {
             const res = await resetEvent({ eventName: eventName });
             if (res.success) {
-                window.alert("Event reset! All check-ins and plates cleared for this event.");
+                showToast("Event reset successfully.");
                 loadData();
             } else {
-                alert(res.message);
+                showToast(res.message || "Failed to reset.", "error");
             }
         } catch (err) {
-            alert("Failed to reset.");
+            showToast("Failed to reset.", "error");
         }
     };
 
@@ -153,13 +140,13 @@ export default function AdminDashboard() {
             const response = await fetch('/api/sync-families', { method: 'POST' });
             const data = await response.json();
             if (data.success) {
-                setSyncResult({ success: true, message: `Sync Complete: ${data.stats.synced} updated.` });
+                showToast(`Sync Complete: ${data.stats.synced} families updated.`);
                 loadData();
             } else {
-                setSyncResult({ success: false, message: 'Sync Failed.' });
+                showToast('Sync failed. Please check logs.', 'error');
             }
         } catch (err) {
-            setSyncResult({ success: false, message: 'Network Error.' });
+            showToast('Network error during sync.', 'error');
         } finally {
             setIsSyncing(false);
         }
@@ -176,15 +163,16 @@ export default function AdminDashboard() {
                 reason: adjReason || `Admin Adjustment: ${adjustmentValue}`,
             });
             if (res.success) {
+                showToast(`Adjusted ${selectedFamily.surname} by ${adjustmentValue}`);
                 setShowAdjustment(false);
                 setAdjustmentValue(0);
                 setAdjReason('');
                 loadData();
             } else {
-                alert(res.message);
+                showToast(res.error || 'Adjustment failed.', 'error');
             }
         } catch (err) {
-            alert('Failed.');
+            showToast('Failed to apply adjustment.', 'error');
         }
     };
 
@@ -211,220 +199,312 @@ export default function AdminDashboard() {
     }, [families, search]);
 
     return (
-        <main className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-8">
+        <main className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-8 relative">
+            {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
             <div className="max-w-7xl mx-auto">
                 {/* Header */}
-                <header className="mb-0">
-                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
+                <header className="mb-10">
+                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 mb-10">
                         <div>
-                            <h1 className="text-4xl font-black text-white tracking-tight">Admin Dashboard</h1>
-                            <div className="mt-2 flex items-center gap-2">
-                                <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></span>
-                                <p className="text-sm text-slate-400 font-bold uppercase tracking-widest">
-                                    Current Event: <span className="text-emerald-400">{eventName}</span>
+                            <h1 className="text-5xl font-black text-white tracking-tighter">Admin Control</h1>
+                            <div className="mt-3 flex items-center gap-3">
+                                <span className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]"></span>
+                                <p className="text-xs text-slate-500 font-black uppercase tracking-[0.3em]">
+                                    Live Session: <span className="text-emerald-400">{eventName}</span>
                                 </p>
                             </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-4">
                             <div className="flex flex-col">
-                                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 ml-1">Switch Event</label>
+                                <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest mb-2 ml-1">Event Select</label>
                                 <select
                                     value={eventName}
                                     onChange={(e) => handleSwitchEvent(e.target.value)}
-                                    className="bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-sm font-bold text-slate-300 outline-none focus:border-emerald-500 min-w-[200px]"
+                                    className="bg-slate-900 border border-slate-800 rounded-xl px-5 py-3 text-sm font-black text-slate-300 outline-none focus:border-emerald-500 min-w-[220px] shadow-lg"
                                 >
                                     {eventList.map(e => <option key={e} value={e}>{e}</option>)}
                                 </select>
                             </div>
 
-                            <div className="h-10 w-[1px] bg-slate-800 mx-2 hidden md:block"></div>
-
                             <button
                                 onClick={() => setShowNewEventModal(true)}
-                                className="bg-red-600 hover:bg-red-500 text-white px-6 py-2.5 rounded-lg text-sm font-black uppercase tracking-wider transition-all shadow-lg shadow-red-900/20 active:scale-95 flex flex-col items-center leading-tight"
+                                className="bg-slate-900 hover:bg-slate-800 border-2 border-red-500/20 hover:border-red-500/40 text-red-500 px-6 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 flex flex-col items-center leading-tight shadow-xl"
                             >
-                                <span className="text-[10px] opacity-80">Reset / Start</span>
+                                <span className="text-[9px] opacity-60 mb-0.5">Initialize</span>
                                 <span>New Event</span>
                             </button>
 
-                            <button onClick={handleSync} disabled={isSyncing} className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded-lg text-sm font-black uppercase tracking-wider transition-all disabled:opacity-50 h-[44px]">
-                                {isSyncing ? 'Syncing...' : 'Sync Data'}
+                            <button
+                                onClick={handleSync}
+                                disabled={isSyncing}
+                                className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3.5 rounded-xl text-sm font-black uppercase tracking-widest transition-all disabled:opacity-50 shadow-xl shadow-blue-900/20 border-b-4 border-blue-800 active:border-b-0 active:scale-95"
+                            >
+                                {isSyncing ? 'Syncing...' : 'Sync Sheet Data'}
                             </button>
                         </div>
                     </div>
-
-                    {syncResult && (
-                        <div className={`mb-6 p-4 rounded-xl border ${syncResult.success ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-red-500/10 border-red-500/20 text-red-400'} text-xs font-bold`}>
-                            {syncResult.message}
-                        </div>
-                    )}
                 </header>
 
                 {/* Stats */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-                        <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Checked In (Families)</p>
-                        <p className="text-3xl font-bold text-emerald-400">{stats.familiesCheckedIn} <span className="text-sm text-slate-600 font-normal">/ {stats.totalFamilies}</span></p>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
+                    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full -mr-8 -mt-8 group-hover:bg-emerald-500/10 transition-colors"></div>
+                        <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-2">Families Present</p>
+                        <p className="text-4xl font-black text-emerald-400 lining-nums racking-tighter">{stats.familiesCheckedIn} <span className="text-lg text-slate-700 font-bold ml-1">/ {stats.totalFamilies}</span></p>
                     </div>
-                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-                        <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Total Entitled Plates</p>
-                        <p className="text-3xl font-bold text-blue-400">{stats.totalPlatesEntitled}</p>
+                    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 w-24 h-24 bg-blue-500/5 rounded-full -mr-8 -mt-8 group-hover:bg-blue-500/10 transition-colors"></div>
+                        <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-2">Capacity Utilization</p>
+                        <p className="text-4xl font-black text-blue-400 lining-nums tracking-tighter">{stats.totalPlatesServed} <span className="text-lg text-slate-700 font-bold ml-1">/ {stats.totalPlatesEntitled}</span></p>
                     </div>
-                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-                        <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Plates Served</p>
-                        <p className="text-3xl font-bold text-purple-400">{stats.totalPlatesServed}</p>
+                    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/5 rounded-full -mr-8 -mt-8 group-hover:bg-purple-500/10 transition-colors"></div>
+                        <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-2">Avg Plates / Fam</p>
+                        <p className="text-4xl font-black text-purple-400 lining-nums tracking-tighter">
+                            {stats.familiesCheckedIn > 0 ? (stats.totalPlatesServed / stats.familiesCheckedIn).toFixed(1) : '0.0'}
+                        </p>
                     </div>
-                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-                        <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Remaining Stock</p>
-                        <p className="text-3xl font-bold text-white">{stats.totalPlatesEntitled - stats.totalPlatesServed}</p>
+                    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/5 rounded-full -mr-8 -mt-8 group-hover:bg-amber-500/10 transition-colors"></div>
+                        <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-2">Surplus Capacity</p>
+                        <p className="text-4xl font-black text-white lining-nums tracking-tighter">{stats.totalPlatesEntitled - stats.totalPlatesServed}</p>
                     </div>
                 </div>
 
-                {/* Search */}
-                <div className="mb-6">
-                    <input
-                        value={search}
-                        onChange={e => setSearch(e.target.value)}
-                        placeholder="Search..."
-                        className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-sm focus:border-emerald-500 outline-none transition-colors"
-                    />
-                </div>
+                {/* Main Content Area */}
+                <div className="bg-slate-900 border border-slate-800 rounded-[2rem] overflow-hidden shadow-2xl">
+                    <div className="p-6 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-6 bg-slate-900/50">
+                        <div className="relative w-full max-w-md">
+                            <input
+                                value={search}
+                                onChange={e => setSearch(e.target.value)}
+                                placeholder="Search live records…"
+                                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-12 py-3.5 text-sm font-bold focus:border-emerald-500 outline-none transition-all focus:ring-4 focus:ring-emerald-500/5"
+                            />
+                            <svg className="w-5 h-5 text-slate-600 absolute left-4 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                            </svg>
+                        </div>
+                        <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest">
+                            Showing {filtered.length} of {families.length} families
+                        </p>
+                    </div>
 
-                {/* Table */}
-                <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-                    <table className="w-full text-left text-sm">
-                        <thead className="bg-slate-800/50 text-slate-500 text-[10px] uppercase font-bold tracking-wider">
-                            <tr>
-                                <th className="p-4">Family</th>
-                                <th className="p-4 text-center">Entitlement</th>
-                                <th className="p-4 text-center">Remaining</th>
-                                <th className="p-4 text-center">Status</th>
-                                <th className="p-4 text-right">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-800">
-                            {filtered.map(f => (
-                                <tr key={f.id} className="hover:bg-slate-800/30">
-                                    <td className="p-4">
-                                        <p className="font-bold text-white">{f.surname}</p>
-                                        <p className="text-xs text-slate-500">{f.head_name}</p>
-                                    </td>
-                                    <td className="p-4 text-center">
-                                        <span className="font-bold text-slate-300">{f.plates_entitled}</span>
-                                        <div className="text-[10px] text-slate-600">
-                                            Size: {f.family_size}
-                                            {f.guests > 0 && <span className="text-emerald-500 font-bold"> +{f.guests} G</span>}
-                                        </div>
-                                    </td>
-                                    <td className="p-4 text-center">
-                                        <span className={`font-bold ${f.plates_remaining === 0 && f.checked_in_at ? 'text-red-500' : 'text-emerald-400'}`}>
-                                            {f.plates_remaining}
-                                        </span>
-                                    </td>
-                                    <td className="p-4 text-center">
-                                        {f.checked_in_at ? (
-                                            <span className="inline-block w-2.5 h-2.5 bg-emerald-500 rounded-full"></span>
-                                        ) : (
-                                            <span className="inline-block w-2.5 h-2.5 bg-slate-700 rounded-full"></span>
-                                        )}
-                                    </td>
-                                    <td className="p-4 text-right">
-                                        {f.checked_in_at && (
-                                            <button
-                                                onClick={() => { setSelectedFamily(f); setShowAdjustment(true); }}
-                                                className="text-xs font-bold uppercase text-slate-500 hover:text-white mr-3 transition-colors"
-                                            >
-                                                Adjust
-                                            </button>
-                                        )}
-                                        <button
-                                            onClick={() => handleOpenHistory(f)}
-                                            className="text-xs font-bold uppercase text-blue-500 hover:text-blue-400 transition-colors"
-                                        >
-                                            Log
-                                        </button>
-                                    </td>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-800/40 text-slate-500 text-[10px] uppercase font-black tracking-[0.2em]">
+                                <tr>
+                                    <th className="p-6">Family Entity</th>
+                                    <th className="p-6 text-center">Entitlement Breakdown</th>
+                                    <th className="p-6 text-center">Inventory</th>
+                                    <th className="p-6 text-center">Status</th>
+                                    <th className="p-6 text-right">Operations</th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800/50">
+                                {filtered.map(f => (
+                                    <tr key={f.id} className="hover:bg-slate-800/20 transition-colors group">
+                                        <td className="p-6">
+                                            <p className="font-black text-white text-lg tracking-tight group-hover:text-emerald-400 transition-colors">{f.surname}</p>
+                                            <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">{f.head_name}</p>
+                                        </td>
+                                        <td className="p-6 text-center">
+                                            <span className="font-black text-slate-200 text-xl lining-nums">{f.plates_entitled}</span>
+                                            <div className="text-[10px] text-slate-600 font-black mt-1">
+                                                SIZE: {f.family_size}
+                                                {f.guests > 0 && <span className="text-emerald-500 ml-1"> + {f.guests} GUESTS</span>}
+                                            </div>
+                                        </td>
+                                        <td className="p-6 text-center">
+                                            <span className={`font-black text-xl lining-nums ${f.plates_remaining === 0 && f.checked_in_at ? 'text-red-500/80' : 'text-emerald-400/80'}`}>
+                                                {f.plates_remaining}
+                                            </span>
+                                        </td>
+                                        <td className="p-6 text-center">
+                                            {f.checked_in_at ? (
+                                                <div className="flex flex-col items-center">
+                                                    <span className="inline-block w-4 h-4 bg-emerald-500 rounded-full shadow-[0_0_8px_rgba(16,185,129,0.3)] mb-1"></span>
+                                                    <span className="text-[9px] font-black text-slate-500 uppercase">ACTIVE</span>
+                                                </div>
+                                            ) : (
+                                                <div className="flex flex-col items-center opacity-30">
+                                                    <span className="inline-block w-4 h-4 bg-slate-700 rounded-full mb-1"></span>
+                                                    <span className="text-[9px] font-black text-slate-600 uppercase">PENDING</span>
+                                                </div>
+                                            )}
+                                        </td>
+                                        <td className="p-6 text-right">
+                                            <div className="flex items-center justify-end gap-4">
+                                                {f.checked_in_at && (
+                                                    <button
+                                                        onClick={() => { setSelectedFamily(f); setShowAdjustment(true); }}
+                                                        className="text-[10px] font-black uppercase text-slate-500 hover:text-white bg-slate-800/50 px-4 py-2 rounded-lg transition-all border border-slate-700/50"
+                                                    >
+                                                        Adjust
+                                                    </button>
+                                                )}
+                                                <button
+                                                    onClick={() => handleOpenHistory(f)}
+                                                    className="text-[10px] font-black uppercase text-blue-500 hover:text-white bg-blue-500/10 px-4 py-2 rounded-lg transition-all border border-blue-500/20"
+                                                >
+                                                    Audit
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
 
             {/* Adjustment Modal */}
             {showAdjustment && selectedFamily && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
-                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-sm">
-                        <h3 className="font-bold text-lg mb-4">Adjust: {selectedFamily.surname}</h3>
-                        <div className="flex gap-4 justify-center mb-6">
-                            <button onClick={() => setAdjustmentValue(v => v - 1)} className="w-12 h-12 bg-slate-800 rounded-xl text-xl font-bold hover:bg-slate-700">-</button>
-                            <input type="number" value={adjustmentValue} onChange={e => setAdjustmentValue(Number(e.target.value))} className="w-20 text-center bg-transparent text-2xl font-bold border-b border-slate-700" />
-                            <button onClick={() => setAdjustmentValue(v => v + 1)} className="w-12 h-12 bg-emerald-500/20 text-emerald-500 rounded-xl text-xl font-bold hover:bg-emerald-500/30">+</button>
+                <div
+                    className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-950/95 backdrop-blur-xl p-4 animate-in fade-in duration-300"
+                    onClick={() => setShowAdjustment(false)}
+                >
+                    <div
+                        className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-10 w-full max-w-sm shadow-2xl"
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <h3 className="font-black text-3xl mb-8 tracking-tighter text-center">Modify Inventory</h3>
+                        <p className="text-center font-bold text-slate-500 text-sm mb-6 uppercase tracking-widest">{selectedFamily.surname}</p>
+
+                        <div className="bg-slate-950 rounded-[2rem] p-8 border border-slate-800 mb-10 shadow-inner">
+                            <div className="flex gap-6 justify-center items-center">
+                                <button
+                                    onClick={() => setAdjustmentValue(v => v - 1)}
+                                    className="w-16 h-16 bg-slate-800 rounded-2xl text-2xl font-black text-slate-400 hover:bg-slate-700 transition"
+                                >−</button>
+                                <div className="w-20 text-center">
+                                    <span className="text-5xl font-black text-white lining-nums">{adjustmentValue}</span>
+                                </div>
+                                <button
+                                    onClick={() => setAdjustmentValue(v => v + 1)}
+                                    className="w-16 h-16 bg-emerald-500/10 text-emerald-500 rounded-2xl text-2xl font-black hover:bg-emerald-500/20 transition"
+                                >+</button>
+                            </div>
                         </div>
-                        <button onClick={handleAdjustment} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl mb-2">Confirm Adjustment</button>
-                        <button onClick={() => setShowAdjustment(false)} className="w-full text-slate-500 font-bold py-2 hover:text-white">Cancel</button>
+
+                        <div className="space-y-4">
+                            <input
+                                value={adjReason}
+                                onChange={e => setAdjReason(e.target.value)}
+                                placeholder="Adjustment Reason…"
+                                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-5 py-4 text-sm font-bold mb-4 outline-none focus:border-emerald-500"
+                            />
+                            <button
+                                onClick={handleAdjustment}
+                                className="w-full bg-emerald-500 hover:bg-emerald-400 text-white font-black py-5 rounded-2xl transition-all shadow-2xl shadow-emerald-500/10 text-lg border-b-4 border-emerald-700 active:border-b-0"
+                            >COMMIT CHANGE</button>
+                            <button
+                                onClick={() => setShowAdjustment(false)}
+                                className="w-full text-slate-600 font-black py-2 hover:text-slate-400 transition-colors uppercase text-xs tracking-widest"
+                            >DISCARD</button>
+                        </div>
                     </div>
                 </div>
             )}
 
             {/* History Modal */}
             {selectedFamily && !showAdjustment && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
-                    <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
-                        <div className="p-6 border-b border-slate-800 flex justify-between items-center">
-                            <h3 className="font-bold">Audit Log: {selectedFamily.surname}</h3>
-                            <button onClick={() => setSelectedFamily(null)} className="text-slate-500 hover:text-white">✕</button>
+                <div
+                    className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-950/95 backdrop-blur-xl p-4 animate-in fade-in duration-300"
+                    onClick={() => setSelectedFamily(null)}
+                >
+                    <div
+                        className="bg-slate-900 border border-slate-800 rounded-[2.5rem] w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl"
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <div className="p-8 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+                            <div className="flex flex-col">
+                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Audit Trail</p>
+                                <h3 className="font-black text-3xl tracking-tighter text-white">{selectedFamily.surname}</h3>
+                            </div>
+                            <button onClick={() => setSelectedFamily(null)} className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white transition-colors">✕</button>
                         </div>
-                        <div className="p-6 overflow-y-auto space-y-4">
-                            {isHistoryLoading ? <p className="text-center text-slate-500">Loading...</p> : history.map(h => (
-                                <div key={h.id} className="text-sm">
-                                    <div className="flex justify-between text-xs text-slate-500 mb-1">
-                                        <span>{new Date(h.created_at).toLocaleString()}</span>
-                                        <span className="uppercase font-bold">{h.action_type}</span>
+                        <div className="p-8 overflow-y-auto space-y-4">
+                            {isHistoryLoading ? (
+                                <div className="text-center py-20">
+                                    <div className="w-8 h-8 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div>
+                                    <p className="text-xs font-black text-slate-600 uppercase tracking-widest">Reconstructing Logs…</p>
+                                </div>
+                            ) : history.map(h => (
+                                <div key={h.id} className="p-5 bg-slate-950 rounded-2xl border border-slate-800/50 hover:border-slate-800 transition-colors">
+                                    <div className="flex justify-between items-center mb-3">
+                                        <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-2 py-1 bg-slate-900 rounded border border-slate-800">
+                                            {new Date(h.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                                        </span>
+                                        <span className={`text-[9px] font-black px-2 py-1 rounded uppercase tracking-widest ${h.action_type === 'SERVE' ? 'bg-emerald-500/10 text-emerald-500' :
+                                                h.action_type === 'CHECK_IN' ? 'bg-blue-500/10 text-blue-500' :
+                                                    'bg-amber-500/10 text-amber-500'
+                                            }`}>
+                                            {h.action_type}
+                                        </span>
                                     </div>
-                                    <p className="text-slate-300">{h.details}</p>
+                                    <p className="text-slate-300 font-bold leading-relaxed">{h.details}</p>
+                                    {h.station_id && <p className="text-[9px] font-black text-slate-600 mt-3 uppercase tracking-widest">Source: {h.station_id}</p>}
                                 </div>
                             ))}
-                            {!isHistoryLoading && history.length === 0 && <p className="text-center text-slate-500">No events.</p>}
+                            {!isHistoryLoading && history.length === 0 && (
+                                <div className="text-center py-20 bg-slate-950 rounded-[2rem] border-2 border-dashed border-slate-800/50">
+                                    <p className="text-xs font-black text-slate-600 uppercase tracking-widest">Zero Records Found</p>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
             )}
+
             {/* New Event Modal */}
             {showNewEventModal && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-200">
-                    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 w-full max-w-md shadow-2xl">
-                        <h3 className="text-2xl font-black text-white mb-2">New Event</h3>
-                        <p className="text-sm text-slate-400 mb-8 leading-relaxed">
-                            Starting a new event will switch the app to a clean state. You can also <button onClick={handleReset} className="text-red-400 font-bold underline">Reset "{eventName}"</button> to clear all its data.
+                <div
+                    className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/98 backdrop-blur-2xl p-4 animate-in fade-in duration-300"
+                    onClick={() => setShowNewEventModal(false)}
+                >
+                    <div
+                        className="bg-slate-900 border border-slate-800 rounded-[3rem] p-12 w-full max-w-md shadow-2xl text-center"
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-8 border border-red-500/20">
+                            <svg className="w-10 h-10 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                        </div>
+                        <h3 className="text-4xl font-black text-white mb-4 tracking-tighter">Initialize Event</h3>
+                        <p className="text-sm text-slate-500 mb-10 leading-relaxed font-bold uppercase tracking-wide">
+                            WARNING: Critical session modification. All existing check-ins will be archived under the new context.
                         </p>
 
-                        <div className="space-y-6">
+                        <div className="space-y-8">
                             <div>
-                                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Event Name</label>
+                                <label className="text-[10px] font-black text-slate-600 uppercase tracking-[0.3em] mb-3 block">New Context Name</label>
                                 <input
                                     type="text"
                                     value={newEventName}
                                     onChange={e => setNewEventName(e.target.value)}
-                                    placeholder="e.g. Wedding Dinner 2024"
-                                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-5 py-4 text-white font-bold text-lg outline-none focus:border-emerald-500 transition-all"
+                                    placeholder="CONTEXT-X-202X"
+                                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-6 py-5 text-white font-black text-xl text-center outline-none focus:border-emerald-500 transition-all shadow-inner uppercase tracking-widest"
                                 />
                             </div>
 
-                            <div className="flex flex-col gap-3">
+                            <div className="flex flex-col gap-4">
                                 <button
                                     onClick={handleStartNewEvent}
                                     disabled={!newEventName.trim()}
-                                    className="w-full bg-emerald-500 hover:bg-emerald-400 text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-emerald-500/20 active:scale-95 disabled:opacity-50"
+                                    className="w-full bg-emerald-500 hover:bg-emerald-400 text-white font-black py-6 rounded-2xl transition-all shadow-2xl shadow-emerald-500/20 active:scale-[0.98] disabled:opacity-50 text-xl"
                                 >
-                                    Start This Event
+                                    INITIALIZE SESSION
                                 </button>
                                 <button
                                     onClick={() => setShowNewEventModal(false)}
-                                    className="w-full text-slate-500 font-bold py-2 hover:text-white transition-colors"
+                                    className="w-full text-slate-600 font-black py-2 hover:text-slate-400 transition-colors uppercase text-xs tracking-widest"
                                 >
-                                    Cancel
+                                    ABORT
                                 </button>
                             </div>
                         </div>
