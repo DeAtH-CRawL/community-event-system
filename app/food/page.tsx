@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { getCheckedInFamilies, servePlates, type Family } from '@/src/lib/actions';
-import { DEFAULT_EVENT, APP_CONFIG } from '@/src/lib/constants';
+import { getCheckedInFamilies, servePlates, type Family, getActiveEventName } from '@/src/lib/actions';
+import { APP_CONFIG, ORGANIZATION_TITLE } from '@/src/lib/constants';
 import { Toast } from '@/src/components/Toast';
 
 // Init client-side supabase for subscribe
@@ -13,7 +13,7 @@ const supabase = createClient(
 );
 
 export default function FoodCounterPage() {
-  const [eventName, setEventName] = useState(DEFAULT_EVENT);
+  const [eventName, setEventName] = useState("Live Session");
   const [families, setFamilies] = useState<Family[]>([]);
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -33,15 +33,17 @@ export default function FoodCounterPage() {
   }, []);
 
   useEffect(() => {
-    const savedEvent = localStorage.getItem('current_event_name');
-    if (savedEvent) setEventName(savedEvent);
     setStationId(localStorage.getItem('station_id') || '');
   }, []);
 
   const loadFamilies = useCallback(async () => {
     setIsLoading(true);
     try {
-      const data = await getCheckedInFamilies(eventName);
+      // Always identify the single active event first
+      const activeName = await getActiveEventName();
+      setEventName(activeName);
+
+      const data = await getCheckedInFamilies(activeName);
       setFamilies(Array.isArray(data) ? data : []);
       setLastSync(new Date());
     } catch (err) {
@@ -49,20 +51,20 @@ export default function FoodCounterPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [eventName]);
+  }, []);
 
   useEffect(() => {
     loadFamilies();
 
     // REALTIME SUBSCRIPTION
+    // Subscribe to ANY change in servings, then reload based on active name
     const channel = supabase.channel('food-live')
       .on(
         'postgres_changes',
         {
           event: '*',
           schema: 'public',
-          table: 'servings',
-          filter: `event_name=eq.${eventName}`
+          table: 'servings'
         },
         () => {
           loadFamilies();
@@ -128,11 +130,14 @@ export default function FoodCounterPage() {
         {/* Header */}
         <header className="mb-8 flex justify-between items-start">
           <div>
+            <p className="text-[10px] uppercase text-slate-500 font-black tracking-[0.3em] mb-1">
+              {ORGANIZATION_TITLE}
+            </p>
             <h1 className="text-3xl font-black text-white tracking-tight">Food Counter</h1>
             <div className="mt-2 flex items-center gap-2">
               <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
               <p className="text-slate-500 font-black uppercase tracking-widest text-[11px]">
-                Event: {eventName}
+                Session Live
               </p>
             </div>
           </div>

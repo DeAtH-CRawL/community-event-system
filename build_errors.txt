@@ -1,0 +1,10 @@
+﻿
+> community-event-system@0.1.0 build
+> next build
+
+Γû▓ Next.js 16.1.3 (Turbopack)
+- Environments: .env.local
+
+  Creating an optimized production build ...
+Γ£ô Compiled successfully in 18.7s
+  Running TypeScript ...

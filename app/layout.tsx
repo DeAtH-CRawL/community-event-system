@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { DEFAULT_EVENT } from "@/src/lib/constants";
+import { ORGANIZATION_TITLE } from "@/src/lib/constants";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Community Event Entry System",
+  title: `${ORGANIZATION_TITLE} - Event System`,
   description: "A trust-based community event entry and food counter system.",
 };
 
@@ -31,8 +31,11 @@ export default function RootLayout({
       >
         <header className="w-full border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 sticky top-0 z-[100] backdrop-blur-md bg-white/80 dark:bg-slate-900/80">
           <div className="max-w-xl mx-auto px-4 pt-4 flex flex-col items-center">
-            <p className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-[0.4em] mb-1">
-              {DEFAULT_EVENT}
+            <h1 className="text-[12px] font-black text-slate-900 dark:text-white uppercase tracking-[0.2em] mb-1 text-center">
+              {ORGANIZATION_TITLE}
+            </h1>
+            <p className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-[0.4em] mb-1">
+              Live Event Session
             </p>
           </div>
           <nav className="max-w-xl mx-auto px-4 pb-4 pt-2 flex items-center justify-between gap-4">

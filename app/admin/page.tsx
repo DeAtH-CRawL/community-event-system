@@ -9,10 +9,10 @@ import {
     getEventStats,
     resetEvent,
     getDistinctEventNames,
+    getEventSummaries,
     type Family,
     type AuditLogEntry,
 } from '@/src/lib/actions';
-import { DEFAULT_EVENT } from '@/src/lib/constants';
 import { Toast } from '@/src/components/Toast';
 
 // Client-side Supabase for Realtime
@@ -22,8 +22,7 @@ const supabase = createClient(
 );
 
 export default function AdminDashboard() {
-    const [eventName, setEventName] = useState(DEFAULT_EVENT);
-    const [eventList, setEventList] = useState<string[]>([DEFAULT_EVENT]);
+    const [eventName, setEventName] = useState("Live Session");
     const [families, setFamilies] = useState<Family[]>([]);
     const [search, setSearch] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -32,6 +31,9 @@ export default function AdminDashboard() {
     // Sync state
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncResult, setSyncResult] = useState<{ success: boolean; message: string } | null>(null);
+
+    // Summaries
+    const [summaries, setSummaries] = useState<AuditLogEntry[]>([]);
 
     // Modal state
     const [selectedFamily, setSelectedFamily] = useState<Family | null>(null);
@@ -52,28 +54,29 @@ export default function AdminDashboard() {
         setToast({ message, type });
     }, []);
 
-    const loadData = useCallback(async (targetEvent?: string) => {
-        const eventToLoad = targetEvent || eventName;
+    const loadData = useCallback(async () => {
         try {
-            const [familiesData, statsData, events] = await Promise.all([
-                getAllFamiliesWithStatus(eventToLoad),
-                getEventStats(eventToLoad),
-                getDistinctEventNames(),
+            // First identify exactly one current event
+            const events = await getDistinctEventNames();
+            const currentName = events[0];
+            setEventName(currentName);
+
+            const [familiesData, statsData, summaryData] = await Promise.all([
+                getAllFamiliesWithStatus(currentName),
+                getEventStats(currentName),
+                getEventSummaries()
             ]);
             setFamilies(Array.isArray(familiesData) ? familiesData : []);
             setStats(statsData);
-            if (events.length > 0) setEventList(events);
+            setSummaries(summaryData);
         } catch (err) {
             console.error(err);
         }
-    }, [eventName]);
+    }, []);
 
     useEffect(() => {
-        const savedEvent = localStorage.getItem('current_event_name');
-        if (savedEvent) setEventName(savedEvent);
-
         setIsLoading(true);
-        loadData(savedEvent || DEFAULT_EVENT).finally(() => setIsLoading(false));
+        loadData().finally(() => setIsLoading(false));
     }, [loadData]);
 
     // Real-time Subscription
@@ -88,7 +91,7 @@ export default function AdminDashboard() {
                     filter: `event_name=eq.${eventName}`
                 },
                 () => {
-                    loadData(eventName);
+                    loadData();
                 }
             )
             .subscribe();
@@ -98,32 +101,37 @@ export default function AdminDashboard() {
         };
     }, [eventName, loadData]);
 
-    const handleSwitchEvent = (name: string) => {
-        setEventName(name);
-        localStorage.setItem('current_event_name', name);
-        loadData(name);
-    };
-
     const handleStartNewEvent = async () => {
         if (!newEventName.trim()) return;
         const name = newEventName.trim();
-        setEventName(name);
-        localStorage.setItem('current_event_name', name);
-        setShowNewEventModal(false);
-        setNewEventName('');
-        await loadData(name);
-        showToast(`Switched to new event: ${name}`);
+
+        try {
+            // First capture current summary and reset
+            const res = await resetEvent({ eventName: eventName });
+            if (res.success) {
+                setEventName(name);
+                localStorage.setItem('current_event_name', name);
+                setShowNewEventModal(false);
+                setNewEventName('');
+                await loadData();
+                showToast(`System Reset & New Session Started: ${name}`);
+            } else {
+                showToast("Failed to initialize new event", "error");
+            }
+        } catch (err) {
+            showToast("Error during initialization", "error");
+        }
     };
 
     const handleReset = async () => {
-        if (!window.confirm(`CRITICAL: This will PERMANENTLY DELETE all entries for "${eventName}". Continue?`)) {
+        if (!window.confirm(`CRITICAL: This will ARCHIVE stats and CLEAR all current entries for "${eventName}". Continue?`)) {
             return;
         }
 
         try {
             const res = await resetEvent({ eventName: eventName });
             if (res.success) {
-                showToast("Event reset successfully.");
+                showToast("Event reset successfully. Summary archived.");
                 loadData();
             } else {
                 showToast(res.message || "Failed to reset.", "error");
@@ -218,14 +226,11 @@ export default function AdminDashboard() {
 
                         <div className="flex flex-wrap items-center gap-4">
                             <div className="flex flex-col">
-                                <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest mb-2 ml-1">Event Select</label>
-                                <select
-                                    value={eventName}
-                                    onChange={(e) => handleSwitchEvent(e.target.value)}
-                                    className="bg-slate-900 border border-slate-800 rounded-xl px-5 py-3 text-sm font-black text-slate-300 outline-none focus:border-emerald-500 min-w-[220px] shadow-lg"
-                                >
-                                    {eventList.map(e => <option key={e} value={e}>{e}</option>)}
-                                </select>
+                                <label className="text-[10px] font-black text-slate-600 uppercase tracking-widest mb-2 ml-1">Current Session</label>
+                                <div className="bg-slate-900 border border-slate-800 rounded-xl px-5 py-3 text-sm font-black text-emerald-400 outline-none min-w-[220px] shadow-lg flex items-center gap-2">
+                                    <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                                    {eventName}
+                                </div>
                             </div>
 
                             <button
@@ -359,6 +364,60 @@ export default function AdminDashboard() {
                         </table>
                     </div>
                 </div>
+
+                {/* Session Snapshots */}
+                <div className="mt-12">
+                    <h2 className="text-xl font-black text-white uppercase tracking-widest mb-6 px-2 flex items-center gap-3">
+                        <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+                        </svg>
+                        Session Snapshots (Archived)
+                    </h2>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {summaries.map((s) => {
+                            const data = s.after_value || {};
+                            return (
+                                <div key={s.id} className="bg-slate-900/40 border border-slate-800 rounded-[2rem] p-8 hover:border-slate-700 transition-all group">
+                                    <div className="flex justify-between items-start mb-6">
+                                        <div>
+                                            <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest mb-1">Session Target</p>
+                                            <h3 className="text-2xl font-black text-white group-hover:text-emerald-400 transition-colors">{s.event_name}</h3>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="text-[9px] font-black text-slate-700 uppercase tracking-widest leading-none">
+                                                {new Date(s.created_at).toLocaleDateString()}
+                                            </p>
+                                            <p className="text-[9px] font-black text-slate-700 uppercase tracking-widest">
+                                                {new Date(s.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-4">
+                                        <div className="flex justify-between items-center bg-slate-950/50 p-4 rounded-xl border border-slate-800/50">
+                                            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Families</span>
+                                            <span className="text-lg font-black text-white lining-nums">{data.familiesCheckedIn} / {data.totalFamilies}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center bg-slate-950/50 p-4 rounded-xl border border-slate-800/50">
+                                            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Plates Served</span>
+                                            <span className="text-lg font-black text-emerald-500 lining-nums">{data.totalPlatesServed}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center bg-slate-950/50 p-4 rounded-xl border border-slate-800/50">
+                                            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Capacity</span>
+                                            <span className="text-lg font-black text-blue-500 lining-nums">{data.totalPlatesEntitled}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                        {summaries.length === 0 && (
+                            <div className="lg:col-span-3 text-center py-16 bg-slate-900/20 rounded-[2.5rem] border-2 border-dashed border-slate-800/50">
+                                <p className="text-xs font-black text-slate-600 uppercase tracking-widest leading-relaxed"> No archived sessions found.<br />Summaries are captured automatically during reset.</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
 
             {/* Adjustment Modal */}
@@ -440,8 +499,8 @@ export default function AdminDashboard() {
                                             {new Date(h.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
                                         </span>
                                         <span className={`text-[9px] font-black px-2 py-1 rounded uppercase tracking-widest ${h.action_type === 'SERVE' ? 'bg-emerald-500/10 text-emerald-500' :
-                                                h.action_type === 'CHECK_IN' ? 'bg-blue-500/10 text-blue-500' :
-                                                    'bg-amber-500/10 text-amber-500'
+                                            h.action_type === 'CHECK_IN' ? 'bg-blue-500/10 text-blue-500' :
+                                                'bg-amber-500/10 text-amber-500'
                                             }`}>
                                             {h.action_type}
                                         </span>

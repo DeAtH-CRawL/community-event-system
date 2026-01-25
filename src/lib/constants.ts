@@ -1,4 +1,4 @@
-export const DEFAULT_EVENT = "Community Dinner 2024";
+export const ORGANIZATION_TITLE = "AHMEDABAD MAHESHWARI YUVA SANGATHAN";
 
 export const APP_CONFIG = {
     STATION_ID_MAX_LENGTH: 12,

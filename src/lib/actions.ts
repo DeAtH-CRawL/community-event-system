@@ -35,6 +35,7 @@ export type ActionResult<T = any> = {
 export type AuditLogEntry = {
   id: string;
   actor_role: string;
+  event_name: string;
   action_type: string;
   details: string;
   created_at: string;
@@ -498,17 +499,33 @@ export async function getDistinctEventNames(): Promise<string[]> {
   const { data, error } = await supabase
     .from('servings')
     .select('event_name')
-    .neq('event_name', '');
+    .limit(1);
 
-  if (error) {
-    console.error('Error fetching event names:', error);
-    return [];
+  if (error || !data || data.length === 0) {
+    return ["Live Session"]; // Robust fallback string
   }
 
-  const names = Array.from(new Set(data.map(s => s.event_name)));
-  return names.length > 0 ? names : ["Community Dinner 2024"];
+  return [data[0].event_name];
 }
 
+/**
+ * Returns the single active event name. 
+ * Source of truth is the first event name found in servings, otherwise fallback.
+ */
+export async function getActiveEventName(): Promise<string> {
+  const names = await getDistinctEventNames();
+  return names[0];
+}
+
+export async function getEventSummaries(): Promise<AuditLogEntry[]> {
+  const { data } = await supabase
+    .from('audit_logs')
+    .select('*')
+    .eq('action_type', 'EVENT_SUMMARY_SNAPSHOT')
+    .order('created_at', { ascending: false });
+
+  return (data || []) as AuditLogEntry[];
+}
 
 export async function getLastSync(eventName: string): Promise<string | null> {
   try {
@@ -527,18 +544,45 @@ export async function getLastSync(eventName: string): Promise<string | null> {
   }
 }
 
+/**
+ * Perform a GLOBAL reset of all runtime event data.
+ * Captures a snapshot of the current state before clearing.
+ */
 export async function resetEvent(params: { eventName: string, stationId?: string }) {
-  const { count } = await supabase.from('servings').select('*', { count: 'exact', head: true }).eq('event_name', params.eventName);
+  // 1. Capture Summary Snapshot of the current state
+  const stats = await getEventStats(params.eventName);
+  await logAudit({
+    role: 'admin',
+    eventName: params.eventName,
+    familyId: null,
+    actionType: 'EVENT_SUMMARY_SNAPSHOT',
+    details: `Auto-captured summary for ${params.eventName}`,
+    stationId: params.stationId,
+    after: {
+      ...stats,
+      timestamp: new Date().toISOString()
+    }
+  });
 
-  // Delete servings
-  await supabase.from('servings').delete().eq('event_name', params.eventName);
+  // 2. GLOBAL RESET: Delete ALL servings to ensure food counters and active members are zeroed out
+  // This enforces the "ONE-EVENT-AT-A-TIME" rule at the data level.
+  const { error: deleteError } = await supabase.from('servings').delete().neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all
 
-  // Delete audit logs for this event
-  await supabase.from('audit_logs').delete().eq('event_name', params.eventName);
+  if (deleteError) {
+    console.error('[Reset] Failed to clear servings:', deleteError);
+  }
 
+  // 3. Clear normal audit logs for the current event name
+  await supabase
+    .from('audit_logs')
+    .delete()
+    .eq('event_name', params.eventName)
+    .neq('action_type', 'EVENT_SUMMARY_SNAPSHOT');
+
+  // 4. Update all relevant paths
   revalidatePath('/admin');
   revalidatePath('/food');
   revalidatePath('/entry');
 
-  return { success: true, message: 'Event reset and audit logs cleared' };
+  return { success: true, message: 'System fully reset. Summary archived.' };
 }

@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { checkInFamily, searchFamilies, getLastSync, type Family } from '@/src/lib/actions';
-import { DEFAULT_EVENT, APP_CONFIG, UI_MESSAGES } from '@/src/lib/constants';
+import { checkInFamily, searchFamilies, getLastSync, type Family, getActiveEventName } from '@/src/lib/actions';
+import { APP_CONFIG, UI_MESSAGES, ORGANIZATION_TITLE } from '@/src/lib/constants';
 
 export default function EntryGatePage() {
-  const [eventName, setEventName] = useState(DEFAULT_EVENT);
+  const [eventName, setEventName] = useState("Live Session");
   const [search, setSearch] = useState('');
   const [results, setResults] = useState<Family[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -25,15 +25,18 @@ export default function EntryGatePage() {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
+  const syncActiveEvent = useCallback(async () => {
+    const activeName = await getActiveEventName();
+    setEventName(activeName);
+    getLastSync(activeName).then(setLastSync);
+  }, []);
+
   useEffect(() => {
-    const savedEvent = localStorage.getItem('current_event_name');
-    if (savedEvent) setEventName(savedEvent);
+    syncActiveEvent();
+
     const saved = localStorage.getItem('station_id') || '';
     setStationId(saved);
-
-    // Initial last sync fetch
-    getLastSync(savedEvent || DEFAULT_EVENT).then(setLastSync);
-  }, []);
+  }, [syncActiveEvent]);
 
   const updateStationId = (val: string) => {
     const cleaned = val.toUpperCase().slice(0, APP_CONFIG.STATION_ID_MAX_LENGTH);
@@ -52,7 +55,11 @@ export default function EntryGatePage() {
         return;
       }
       try {
-        const data = await searchFamilies(search, eventName);
+        // Always try to get latest event name before search to handle resets gracefully
+        const activeName = await getActiveEventName();
+        if (!cancelled) setEventName(activeName);
+
+        const data = await searchFamilies(search, activeName);
         if (!cancelled) {
           setResults(Array.isArray(data) ? data : []);
         }
@@ -71,7 +78,7 @@ export default function EntryGatePage() {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [search, eventName, showToast]);
+  }, [search, showToast]);
 
   const handleCheckIn = async () => {
     if (!selectedFamily) return;
@@ -124,19 +131,22 @@ export default function EntryGatePage() {
         {/* Header */}
         <header className="mb-10 flex justify-between items-start">
           <div>
+            <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mb-1">
+              {ORGANIZATION_TITLE}
+            </p>
             <h1 className="text-4xl font-black tracking-tighter text-emerald-400">
               Entry Gate
             </h1>
             <div className="mt-2 flex flex-col gap-1.5">
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
-                <p className="text-slate-400 font-black uppercase tracking-widest text-[11px]">
-                  Event: {eventName}
+                <p className="text-slate-400 font-bold uppercase tracking-widest text-[9px]">
+                  Live Session Active
                 </p>
               </div>
               {lastSync && (
                 <p className="text-slate-500 font-bold text-[10px] uppercase tracking-widest bg-slate-900 px-2 py-0.5 rounded border border-slate-800 w-fit">
-                  Synced: {new Date(lastSync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  Database Sync: {new Date(lastSync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </p>
               )}
             </div>
