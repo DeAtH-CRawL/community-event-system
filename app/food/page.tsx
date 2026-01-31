@@ -93,12 +93,12 @@ export default function FoodCounterPage() {
   const handleServe = async () => {
     if (!selectedFamily) return;
 
-    setIsProcessing(selectedFamily.id);
+    setIsProcessing(selectedFamily.family_id);
     try {
       const result = await servePlates({
         role: 'volunteer',
         eventName: eventName,
-        familyId: selectedFamily.id,
+        familyId: selectedFamily.family_id,
         quantity: customQty,
         stationId: stationId
       });
@@ -180,7 +180,7 @@ export default function FoodCounterPage() {
           )}
 
           {activeFamilies.map(f => (
-            <div key={f.id} className="bg-slate-900 border-2 border-slate-800 rounded-[1.5rem] p-6 relative overflow-hidden shadow-xl hover:border-slate-700 transition-all">
+            <div key={f.family_id} className="bg-slate-900 border-2 border-slate-800 rounded-[1.5rem] p-6 relative overflow-hidden shadow-xl hover:border-slate-700 transition-all">
               <div className="flex justify-between items-start mb-6">
                 <div>
                   <h3 className="text-2xl font-black text-white leading-tight tracking-tight">{f.surname}</h3>
@@ -199,13 +199,13 @@ export default function FoodCounterPage() {
 
               <button
                 onClick={() => openServeModal(f)}
-                disabled={isProcessing === f.id}
+                disabled={isProcessing === f.family_id}
                 className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-xl transition-all active:scale-[0.98] disabled:opacity-50 text-lg shadow-lg shadow-emerald-900/20 border-b-4 border-emerald-800 active:border-b-0 uppercase tracking-widest"
               >
                 Serve Plates
               </button>
 
-              {isProcessing === f.id && (
+              {isProcessing === f.family_id && (
                 <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center">
                   <div className="w-8 h-8 border-4 border-white/20 border-t-white rounded-full animate-spin"></div>
                 </div>
@@ -224,7 +224,7 @@ export default function FoodCounterPage() {
               <h3 className="text-xs font-black text-slate-600 uppercase tracking-[0.3em] mb-6 px-2">Recently Completed ({exhaustedFamilies.length})</h3>
               <div className="grid grid-cols-1 gap-3">
                 {exhaustedFamilies.map(f => (
-                  <div key={f.id} className="bg-slate-900/30 border border-slate-800/40 rounded-2xl p-4 flex justify-between items-center opacity-40 grayscale">
+                  <div key={f.family_id} className="bg-slate-900/30 border border-slate-800/40 rounded-2xl p-4 flex justify-between items-center opacity-40 grayscale">
                     <div>
                       <p className="font-black text-slate-400 text-lg tracking-tight">{f.surname}</p>
                       <p className="text-xs text-slate-600 font-bold uppercase tracking-wider">{f.head_name}</p>
@@ -286,7 +286,7 @@ export default function FoodCounterPage() {
               </div>
               <button
                 onClick={handleServe}
-                disabled={isProcessing === selectedFamily.id}
+                disabled={isProcessing === selectedFamily.family_id}
                 className="w-full bg-emerald-500 text-white font-black py-6 rounded-2xl hover:bg-emerald-400 transition-all shadow-2xl shadow-emerald-500/10 text-xl border-b-4 border-emerald-700 active:border-b-0 uppercase tracking-widest"
               >
                 Authorize ({customQty})
