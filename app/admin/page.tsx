@@ -166,7 +166,7 @@ export default function AdminDashboard() {
             const res = await adjustPlates({
                 role: 'admin',
                 eventName: eventName,
-                familyId: selectedFamily.id,
+                familyId: selectedFamily.family_id,
                 adjustment: adjustmentValue,
                 reason: adjReason || `Admin Adjustment: ${adjustmentValue}`,
             });
@@ -189,7 +189,7 @@ export default function AdminDashboard() {
         setHistory([]);
         setIsHistoryLoading(true);
         try {
-            const data = await getAuditHistory(eventName, f.id);
+            const data = await getAuditHistory(eventName, f.family_id);
             setHistory(data);
         } finally {
             setIsHistoryLoading(false);
@@ -310,7 +310,7 @@ export default function AdminDashboard() {
                             </thead>
                             <tbody className="divide-y divide-slate-800/50">
                                 {filtered.map(f => (
-                                    <tr key={f.id} className="hover:bg-slate-800/20 transition-colors group">
+                                    <tr key={f.family_id} className="hover:bg-slate-800/20 transition-colors group">
                                         <td className="p-6">
                                             <p className="font-black text-white text-lg tracking-tight group-hover:text-emerald-400 transition-colors">{f.surname}</p>
                                             <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">{f.head_name}</p>

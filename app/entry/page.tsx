@@ -88,7 +88,7 @@ export default function EntryGatePage() {
       const result = await checkInFamily({
         role: 'volunteer',
         eventName: eventName,
-        familyId: selectedFamily.id,
+        familyId: selectedFamily.family_id,
         guests: guests,
         stationId: stationId,
       });
@@ -177,10 +177,24 @@ export default function EntryGatePage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Family Name / Phone"
-              className="w-full rounded-[1.5rem] border border-slate-800 bg-slate-900/60 pl-16 pr-8 py-6 text-2xl font-black placeholder:text-slate-600 focus:outline-none focus:ring-8 focus:ring-emerald-500/5 focus:border-emerald-500 transition-all shadow-2xl"
+              className="w-full rounded-[1.5rem] border border-slate-800 bg-slate-900/60 pl-16 pr-24 py-6 text-2xl font-black placeholder:text-slate-600 focus:outline-none focus:ring-8 focus:ring-emerald-500/5 focus:border-emerald-500 transition-all shadow-2xl"
               autoFocus
               aria-label="Search families by surname or phone number"
             />
+            {search.length > 0 && (
+              <button
+                onClick={() => {
+                  setSearch('');
+                  setResults([]);
+                }}
+                className="absolute inset-y-0 right-6 flex items-center text-slate-500 hover:text-emerald-400 transition-colors"
+                aria-label="Clear search"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
 
@@ -197,7 +211,7 @@ export default function EntryGatePage() {
             const isCheckedIn = !!family.checked_in_at;
             return (
               <button
-                key={family.id}
+                key={family.family_id}
                 type="button"
                 onClick={() => {
                   if (!isCheckedIn) {
@@ -243,14 +257,26 @@ export default function EntryGatePage() {
           })}
 
           {search.length >= APP_CONFIG.SEARCH_MIN_CHARS && results.length === 0 && !isLoading && (
-            <div className="text-center py-20 bg-slate-900/20 rounded-[2.5rem] border-4 border-dashed border-slate-800/50">
-              <div className="w-16 h-16 bg-slate-900 rounded-full flex items-center justify-center mx-auto mb-6 border border-slate-800">
-                <svg className="w-8 h-8 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="text-center py-20 bg-slate-900/20 rounded-[2.5rem] border-4 border-dashed border-slate-800/50 animate-in fade-in duration-500">
+              <div className="w-20 h-20 bg-slate-900 rounded-full flex items-center justify-center mx-auto mb-8 border-2 border-slate-800">
+                <svg className="w-10 h-10 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
               </div>
-              <p className="text-2xl font-black text-slate-500 mb-2">{UI_MESSAGES.NOT_FOUND}</p>
-              <p className="text-sm text-slate-600 font-bold px-8 leading-relaxed max-w-xs mx-auto">Try searching for just the SURNAME or the LAST 4 DIGITS of the phone number.</p>
+              <p className="text-3xl font-black text-slate-400 mb-4 tracking-tight">{UI_MESSAGES.NOT_FOUND}</p>
+              <p className="text-sm text-slate-600 font-bold px-8 leading-relaxed max-w-md mx-auto mb-6">
+                Try searching by <span className="text-slate-400">surname</span> or <span className="text-slate-400">phone number</span>.
+                <br />Search is <span className="text-emerald-600">case-insensitive</span> and matches partial text.
+              </p>
+              <button
+                onClick={() => setSearch('')}
+                className="inline-flex items-center gap-2 px-6 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-black text-xs uppercase tracking-widest transition-all"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                Clear Search
+              </button>
             </div>
           )}
         </section>

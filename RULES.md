@@ -11,3 +11,6 @@
 7. UI must be mobile-first, simple, and fast.
 8. Trust-based verification only.
 9. Do not over-engineer.
+10. unlimited guests are allowed
+11. only veg food
+12. 

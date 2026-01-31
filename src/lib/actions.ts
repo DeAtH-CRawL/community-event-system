@@ -10,7 +10,7 @@ import { revalidatePath } from 'next/cache';
 export type UserRole = 'volunteer' | 'admin';
 
 export type Family = {
-  id: string;             // UUID
+  family_id: string;      // Changed from 'id' - now VARCHAR(50) like "F001"
   surname: string;
   head_name: string;
   phone: string | null;
@@ -85,7 +85,7 @@ export async function searchFamilies(query: string, eventName: string): Promise<
   try {
     const { data: allFamilies, error } = await supabase
       .from('families')
-      .select('id, surname, head_name, phone, family_size');
+      .select('family_id, surname, head_name, phone, family_size');
 
     if (error) {
       console.error('[Search] Supabase Error:', error);
@@ -100,7 +100,7 @@ export async function searchFamilies(query: string, eventName: string): Promise<
 
     if (families.length === 0) return [];
 
-    const familyIds = families.map(f => f.id);
+    const familyIds = families.map(f => f.family_id);
     const { data: servings } = await supabase
       .from('servings')
       .select('family_id, plates_used, guests, checked_in_at')
@@ -110,13 +110,13 @@ export async function searchFamilies(query: string, eventName: string): Promise<
     const servingMap = new Map((servings || []).map(s => [s.family_id, s]));
 
     return families.map(f => {
-      const s = servingMap.get(f.id);
+      const s = servingMap.get(f.family_id);
       const used = s?.plates_used || 0;
       const guests = s?.guests || 0;
       const totalEntitled = f.family_size + guests;
 
       return {
-        id: f.id,
+        family_id: f.family_id,
         surname: f.surname,
         head_name: f.head_name,
         phone: f.phone || null,
@@ -151,8 +151,8 @@ export async function checkInFamily(params: {
   try {
     const { data: family, error: fetchError } = await supabase
       .from('families')
-      .select('id, surname')
-      .eq('id', familyId)
+      .select('family_id, surname')
+      .eq('family_id', familyId)
       .single();
 
     if (fetchError || !family) {
@@ -224,7 +224,7 @@ export async function servePlates(params: {
 
   try {
     const [familyResult, servingResult] = await Promise.all([
-      supabase.from('families').select('family_size').eq('id', familyId).single(),
+      supabase.from('families').select('family_size').eq('family_id', familyId).single(),
       supabase.from('servings').select('plates_used, guests, id').eq('event_name', eventName).eq('family_id', familyId).single()
     ]);
 
@@ -402,7 +402,7 @@ export async function getCheckedInFamilies(eventName: string): Promise<Family[]>
     const guests = s.guests || 0;
     const totalEntitled = s.families.family_size + guests;
     return {
-      id: s.family_id,
+      family_id: s.family_id,
       surname: s.families.surname,
       head_name: s.families.head_name,
       phone: s.families.phone,
@@ -433,13 +433,13 @@ export async function getAllFamiliesWithStatus(eventName: string): Promise<Famil
   const sMap = new Map(servings?.map(s => [s.family_id, s]) || []);
 
   return families.map(f => {
-    const s = sMap.get(f.id);
+    const s = sMap.get(f.family_id);
     const used = s?.plates_used || 0;
     const guests = s?.guests || 0;
     const totalEntitled = f.family_size + guests;
 
     return {
-      id: f.id,
+      family_id: f.family_id,
       surname: f.surname,
       head_name: f.head_name,
       phone: f.phone,
@@ -478,8 +478,8 @@ export async function getEventStats(eventName: string) {
   let entitled = 0;
   if (servings && servings.length > 0) {
     const ids = servings.map(s => s.family_id);
-    const { data: families } = await supabase.from('families').select('id, family_size').in('id', ids);
-    const familyMap = new Map((families || []).map(f => [f.id, f.family_size]));
+    const { data: families } = await supabase.from('families').select('family_id, family_size').in('family_id', ids);
+    const familyMap = new Map((families || []).map(f => [f.family_id, f.family_size]));
 
     entitled = servings.reduce((sum, s) => {
       const fSize = familyMap.get(s.family_id) || 0;
